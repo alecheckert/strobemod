@@ -29,7 +29,7 @@ def sample_sphere(N, d=3):
     if isinstance(N, int):
         N = [N]
     p = np.random.normal(size=(np.prod(N), d))
-    p = (p.T / np.sqrt((p**2).sum(axis=1)))
+    p = (p.T / np.sqrt((p**2).sum(axis=1))).T 
     return p.reshape(tuple(list(N) + [d]))
 
 def tracks_to_dataframe(positions, kill_nan=True):

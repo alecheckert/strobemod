@@ -107,7 +107,7 @@ def pdf_from_cf(func_cf, x, **kwargs):
 
     """
     # Spectrum
-    k = np.fft.rfftfreq(x.shape[0], d=(x[1]-[0]))
+    k = np.fft.rfftfreq(x.shape[0], d=(x[1]-x[0]))
 
     # Evaluate characteristic function
     cf = func_cf(2.0 * np.pi * k, **kwargs)
