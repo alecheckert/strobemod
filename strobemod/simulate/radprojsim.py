@@ -2,6 +2,7 @@
 """
 radprojsim.py -- generate the matrices that allow numerical
 projection of 3D radial displacement distributions into 2D
+planes with finite thickness
 
 """
 import numpy as np 
@@ -27,6 +28,10 @@ def shell_project(bin_edges, R0, R1, delta_z, n_samples=10000000,
 	radial displacements in the XY plane. This is a vector over a set of
 	radial bins. The sum of the vector is the probability that the final
 	z position is between -delta_z/2 and +delta_z/2.
+
+    This situation is analogous to the diffusion process for single
+    molecule tracking in highly inclined laminated optical sheet 
+    settings.
 
 	args
 	----

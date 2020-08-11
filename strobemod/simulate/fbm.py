@@ -266,7 +266,7 @@ class FractionalBrownianMotion(MultivariateNormalRandomVector):
 
     init
     ----
-        N           :   int, the number of steps in
+        track_len   :   int, the number of steps in
                         the FBM 
         hurst       :   float between 0.0 and 1.0,
                         the Hurst parameter
@@ -283,9 +283,9 @@ class FractionalBrownianMotion(MultivariateNormalRandomVector):
                         on which this FBM is defined
 
     """
-
-    def __init__(self, N=8, hurst=0.5, D=1.0, dt=0.01, D_type=1):
-        self.N = N
+    def __init__(self, track_len=10, hurst=0.5, D=1.0, dt=0.01, D_type=1):
+        self.track_len = track_len 
+        self.N = track_len 
         self.hurst = hurst
         self.D = D
         self.dt = dt
@@ -294,14 +294,14 @@ class FractionalBrownianMotion(MultivariateNormalRandomVector):
 
         # Build the FBM covariance matrix
         if D_type == 1:
-            T, S = (np.indices((N, N)) + 1) * dt
+            T, S = (np.indices((track_len, track_len)) + 1) * dt
             self.C = D * (
                 np.power(T, 2 * hurst)
                 + np.power(S, 2 * hurst)
                 - np.power(np.abs(T - S), 2 * hurst)
             )
         elif D_type == 2:
-            T, S = (np.indices((N, N)) + 1) * dt * D
+            T, S = (np.indices((track_len, track_len)) + 1) * dt * D
             self.C = (
                 np.power(T, 2 * hurst)
                 + np.power(S, 2 * hurst)
@@ -309,7 +309,7 @@ class FractionalBrownianMotion(MultivariateNormalRandomVector):
             )
 
         # Set zero mean
-        self.mean = np.zeros(N, dtype="float64")
+        self.mean = np.zeros(track_len, dtype="float64")
 
     def get_time(self):
         """
@@ -317,7 +317,7 @@ class FractionalBrownianMotion(MultivariateNormalRandomVector):
         Brownian motion is defined.
 
         """
-        return np.arange(self.N) * self.dt
+        return np.arange(self.track_len) * self.dt
 
 
 class BrownianMotion(FractionalBrownianMotion):
@@ -328,7 +328,7 @@ class BrownianMotion(FractionalBrownianMotion):
 
     init
     ----
-        N           :   int, the number of steps in
+        track_len   :   int, the number of steps in
                         the FBM 
         D           :   float, diffusion coefficient
         dt          :   float, the time interval for
@@ -351,7 +351,7 @@ class BrownianMotion(FractionalBrownianMotion):
 
     """
 
-    def __init__(self, N=8, D=1.0, dt=0.01):
-        kwargs = {"N": N, "D": D, "dt": dt}
+    def __init__(self, track_len=8, D=1.0, dt=0.01):
+        kwargs = {"N": track_len, "D": D, "dt": dt}
         super(BrownianMotion, self).__init__(**kwargs)
 

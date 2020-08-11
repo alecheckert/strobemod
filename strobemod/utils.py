@@ -8,7 +8,6 @@ import numpy as np
 
 # 3D Hankel transform
 from hankel import SymmetricFourierTransform 
-# HankelTrans3D = SymmetricFourierTransform(ndim=3, N=10000, h=0.005)
 HankelTrans3D = SymmetricFourierTransform(ndim=3, N=10000, h=0.005)
 
 # Univariate spline interpolation
@@ -25,7 +24,7 @@ def normalize_pmf(pmfs):
     Normalize a 1D or 2D histogram to a probability mass function,
     avoiding divide-by-zero errors for axes with zero observations.
 
-    The typical format for a PMF in hilonom is a 2D ndarray where
+    The typical format for a PMF in strobemodels is a 2D ndarray where
     the first dimension corresponds to time and the second dimension
     corresponds to the spatial (2D radial) displacement. Here, each
     timestep is normalized independently. If there are zero 
@@ -64,9 +63,9 @@ def radnorm(r, pdf, d=2):
 
     	pdf_rad(r) = 2 pi int_{0}^{infty} r pdf(r) dr 
 
-    For example, normalizing the Gaussian density with d = 2 would give a 
-    Rayleigh distribution, with d = 3 would give a Maxwell-Boltzmann 
-    distribution, etc.
+    Normalizing the Gaussian density with d = 2 would give a Rayleight
+    distribution, with d = 3 would give a Maxwell-Boltzmann distribution,
+    and so on.
 
     This method approximates the PDF at a discrete set of radial points. For
     it to be accurate, the spacing of the support *r* must be small relative

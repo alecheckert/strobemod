@@ -20,9 +20,8 @@ class LevyFlight3D(object):
     """
     Simulate a 3D Levy flight using an approximate inverse CDF approach.
 
-    definition
-    ----------
-
+    description
+    -----------
         LevyFlight3D simulates a Markovian diffusion process whose 3D
         radial displacements are distributed according to a Levy stable
         random variable, and whose angular displacements are isotropically
@@ -40,7 +39,7 @@ class LevyFlight3D(object):
                         np.linspace generating the support to use by default
                         for CDF sampling. The default range (0.0, 10.0, 10001)
                         works well up to a diffusion coefficient of about 80.0
-                        (scale sqrt(80)) for Brownian motion.
+                        (scale = sqrt(80)) for Brownian motion.
 
     example simulation
     ------------------
@@ -62,20 +61,21 @@ class LevyFlight3D(object):
                         between 0.0 and 1.0
 
     """
-    def __init__(self, alpha, scale, dt=0.01, interpolation_range=(0.0, 10.0, 10001)):
+    def __init__(self, alpha, scale, dt=0.01, track_len=10, interpolation_range=(0.0, 10.0, 10001)):
         self.alpha = alpha 
         self.scale = scale
         self.dt = dt 
+        self.track_len = track_len 
         self.interpolation_range = interpolation_range 
 
-    def __call__(self, N, traj_len, n_iter=10):
+    def __call__(self, N, track_len=None, n_iter=10):
         """
         Simulate *N* instances of this Levy flight.
 
         args
         ----
             N           :   int, the number of Levy flights to simulate
-            traj_len    :   int, the length of each trajectory to 
+            track_len   :   int, the length of each trajectory to 
                             simulate
             n_iter      :   int, the number of iterations of Newton's
                             method to use for inverse CDF sampling
@@ -86,18 +86,21 @@ class LevyFlight3D(object):
                 of each Levy flight at each timepoint
 
         """
+        if track_len is None:
+            track_len = self.track_len 
+
         # Generate the radial displacements
-        p = np.random.random(size=(N * (traj_len-1)))
-        r = self.inverse_cdf(p, n_iter=n_iter).reshape((N, traj_len-1))
+        p = np.random.random(size=(N * (track_len-1)))
+        r = self.inverse_cdf(p, n_iter=n_iter).reshape((N, track_len-1))
 
         # Generate the angular displacements
-        v = sample_sphere((N, traj_len), d=3)
+        v = sample_sphere((N, track_len), d=3)
 
         # The first position for each trajectory is always zero
         v[:,0,:] = 0
 
         # Multiply radial and angular displacements
-        for t in range(1, traj_len):
+        for t in range(1, track_len):
             v[:,t,:] = (v[:,t,:].T * r[:,t-1]).T 
 
         # Accumulate the displacements to generate trajectories
@@ -260,14 +263,13 @@ class LevyFlight3D(object):
         pdf[pdf<0] = 0
         cdf = np.cumsum(pdf)
 
-        # Take the closest bin to each point
+        # Take the closest bin to each point as the initial guess
         r0 = r[np.digitize(p, cdf)]
 
-        # Do a few rounds of Newton to refine the estimates
+        # Do a few rounds of Newton to refine the guesses
         iter_idx = 0
         for i in range(n_iter):
-            diff = -0.5 * (self.cdf_rad(r0) - p) / self.cdf_rad_dev(r0)
-            r0 = r0 + diff 
+            r0 += -0.5 * (self.cdf_rad(r0) - p) / self.cdf_rad_dev(r0)
 
         return r0 
 
