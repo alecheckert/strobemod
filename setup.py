@@ -6,7 +6,7 @@ setup.py
 import setuptools
 
 setuptools.setup(
-    name="strobemod",
+    name="strobemodels",
     version="1.0",
     author="Alec Heckert",
     author_email="aheckert@berkeley.edu",
