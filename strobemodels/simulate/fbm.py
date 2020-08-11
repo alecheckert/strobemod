@@ -161,7 +161,7 @@ class MultivariateNormalRandomVector(object):
 
         """
         assert self.N == MN.N
-        return MultivariateNormalRandomVector(self.mean + MN.mean, self.C + MN.C)
+        return MultivariateNormalRandomVector(self.C + MN.C, mean=(self.mean + MN.mean))
 
     def linear_transformation(self, A):
         """
@@ -181,7 +181,7 @@ class MultivariateNormalRandomVector(object):
 
         """
         assert A.shape[0] == self.N
-        return MultivariateNormalRandomVector(A.T @ self.mean, A.T @ self.C @ A)
+        return MultivariateNormalRandomVector(A.T @ self.C @ A, mean=(A.T @ self.mean))
 
     def marginalize(self, indices):
         """
@@ -204,7 +204,7 @@ class MultivariateNormalRandomVector(object):
                 marginal random vector
 
         """
-        if isinstances(indices, int):
+        if isinstance(indices, int):
             indices = [indices]
         out = [i for i in range(self.N) if i not in indices]
         m = len(out)
@@ -254,8 +254,7 @@ class MultivariateNormalRandomVector(object):
         sub_C = C11 - A @ C21
         sub_mean = mean1 + A @ (np.asarray(values) - mean2)
 
-        return MultivariateNormal(sub_mean, sub_C)
-
+        return MultivariateNormalRandomVector(sub_C, mean=sub_mean)
 
 class FractionalBrownianMotion(MultivariateNormalRandomVector):
     """
@@ -351,7 +350,7 @@ class BrownianMotion(FractionalBrownianMotion):
     """
 
     def __init__(self, track_len=8, D=1.0, dt=0.01):
-        kwargs = {"N": track_len, "D": D, "dt": dt}
+        kwargs = {"track_len": track_len, "D": D, "dt": dt}
         super(BrownianMotion, self).__init__(**kwargs)
 
 class FractionalBrownianMotion3D(object):
@@ -362,6 +361,7 @@ class FractionalBrownianMotion3D(object):
     """
     def __init__(self, **kwargs):
         self.fbm = FractionalBrownianMotion(**kwargs)
+        self.track_len = self.fbm.track_len 
 
     def __call__(self, n=1):
         """
