@@ -4,7 +4,6 @@ fbm.py -- simulate short fractional Brownian motion trajectories
 
 """
 import numpy as np
-import pandas as pd
 
 class MultivariateNormalRandomVector(object):
     """
@@ -355,3 +354,26 @@ class BrownianMotion(FractionalBrownianMotion):
         kwargs = {"N": track_len, "D": D, "dt": dt}
         super(BrownianMotion, self).__init__(**kwargs)
 
+class FractionalBrownianMotion3D(object):
+    """
+    A wrapper on FractionalBrownianMotion that simulates independent
+    FBMs in each of 3 spatial dimensions.
+
+    """
+    def __init__(self, **kwargs):
+        self.fbm = FractionalBrownianMotion(**kwargs)
+
+    def __call__(self, n=1):
+        """
+        Simulate *n* FBMs of length *track_len*.
+
+        returns
+        -------
+            3D ndarray of shape (n, track_len, 3), the ZYX
+                positions of each trajectory at each frame
+
+        """
+        result = np.empty((n, self.fbm.track_len, 3), dtype=np.float64)
+        for d in range(3):
+            result[:,1:,d] = self.fbm(n)[:,:-1]
+        return result

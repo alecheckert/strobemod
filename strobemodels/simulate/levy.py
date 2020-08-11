@@ -6,10 +6,10 @@ levy.py -- simulate 3D Levy flights
 import os
 import numpy as np 
 from scipy.stats import levy_stable 
-from strobemod.simulate.simutils import (
+from strobemodels.simulate.simutils import (
     sample_sphere
 )
-from strobemod.utils import (
+from strobemodels.utils import (
     HankelTrans3D,
     spline,
     pdf_from_cf_rad,
