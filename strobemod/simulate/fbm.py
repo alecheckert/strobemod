@@ -25,8 +25,11 @@ class MultivariateNormalRandomVector(object):
         Wiener process, do
 
             # Covariance matrix
-            C = np.array([[1, 1, 1], [1, 2, 2],
-                [1, 2, 3]])
+            C = np.array([
+                [1, 1, 1],
+                [1, 2, 2],
+                [1, 2, 3]
+            ])
 
             # Simulator object
             MN = MultivariateNormalRandomVector(C)
