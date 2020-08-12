@@ -88,7 +88,7 @@ def strobe_infinite_plane(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_ou
         return tracks 
 
 def strobe_one_state_infinite_plane(model, n_tracks, track_len=10, dz=0.7, dt=0.01,
-    loc_error=0.0, exclude_outside=True, return_dataframe=False, **model_kwargs):
+    loc_error=0.0, exclude_outside=True, return_dataframe=True, **model_kwargs):
     """
     Simulate a single diffusing state in a HiLo geometry.
 

@@ -19,6 +19,120 @@ PACKAGE_DIR = os.path.split(os.path.abspath(__file__))[0]
 # Data directory with immutable config stuff
 DATA_DIR = os.path.join(PACKAGE_DIR, "data")
 
+########################
+## ARRAY MANIPULATION ##
+########################
+
+def generate_support(jump_bins, n_frames, frame_interval):
+    """
+    For fitting CDFs with multiple timepoints, generate a bivariate
+    support for the fitting routine.
+
+    This is a set of (r, t) tuples, where *r* is the radial displacement
+    in the 2D plane of the camera, expressed in um*, and *t* is the
+    interval between the first and second observations in seconds.
+
+    args
+    ----
+        jump_bins       :   1D ndarray, the edges of each jump length
+                            bin in um. Must be at least length 2. 
+        n_frames        :   int, the maximum number of frame intervals
+                            to consider
+        frame_interval  :   float, the length of a single frame interval
+                            in seconds
+
+    returns
+    -------
+        2D ndarray of shape (n_frames * n_jump_bins), the support
+
+    """
+    n_jump_bins = jump_bins.shape[0] - 1
+    M = n_frames * n_jump_bins
+    rt_tuples = np.zeros((M, 2), dtype=np.float64)
+    for t in range(n_frames):
+        rt_tuples[t*n_jump_bins : (t+1)*n_jump_bins, 0] = jump_bins[1:]
+        rt_tuples[t*n_jump_bins : (t+1)*n_jump_bins, 1] = (t+1) * frame_interval 
+    return rt_tuples 
+
+###############################
+## DIFFUSION MODEL UTILITIES ##
+###############################
+
+def generate_brownian_transfer_function(support, D, frame_interval):
+    """
+    Generate a transfer function for Brownian diffusion.
+
+    args
+    ----
+        support         :   1D ndarray, the points in the support,
+                            in um
+        D               :   float, diffusion coefficient in um^2 s^-1
+        frame_interval  :   float, the time between frames in seconds
+
+    returns
+    -------
+        1D ndarray of dtype complex128, the RFFT for the Green's
+            function of this Brownian motion
+
+    """
+    g = np.exp(-(support**2) / (4*D*frame_interval))
+    g /= g.sum()
+    return np.fft.rfft(g)
+
+def defoc_prob_brownian(D, n_frames, frame_interval, dz):
+    """
+    Calculate the fraction of Brownian molecules remaining in the focal
+    volume at a few timepoints.
+
+    Specifically:
+
+    A Brownian motion is generated (photoactivated) with uniform probability
+    across the focal depth *dz*, and is then observed at regular intervals.
+    If the particle is outside the focal volume at any one frame interval,
+    it is counted as "lost" and is not observed for any subsequent frame, 
+    even if it diffuses back into the focal volume.
+
+    This function returns the probability that such a particle is observed
+    at each frame.
+
+    args
+    ----
+        D           :   float, diffusion coefficient in um^2 s^-1
+        n_frames    :   int, the number of frame intervals to consider
+        frame_interval: float, in seconds
+        dz          :   float, focal volume depth in um
+
+    returns
+    -------
+        1D ndarray, shape (n_frames), the probability of defocalization 
+            at each frame
+
+    """
+    # Define the initial probability mass 
+    s = (int(dz//2.0)+1) * 2
+    support = np.linspace(-s, s, int(((2*s)//0.001)+2))[:-1]
+    hz = 0.5 * dz 
+    inside = np.abs(support) <= hz 
+    outside = ~inside 
+    pmf = inside.astype("float64")
+    pmf /= pmf.sum()
+
+    # Define the transfer function for this BM
+    g_rft = generate_brownian_transfer_function(support, D, frame_interval)
+
+    # Propagate over subsequent frame intervals
+    result = np.zeros(n_frames, dtype=np.float64)
+    for t in range(n_frames):
+        pmf = np.fft.fftshift(np.fft.irfft(np.fft.rfft(pmf) * g_rft))
+        pmf[outside] = 0.0
+        result[t] = pmf.sum()
+
+    return result 
+
+###################
+## NORMALIZATION ##
+###################
+
 def normalize_pmf(pmfs):
     """
     Normalize a 1D or 2D histogram to a probability mass function,
@@ -52,6 +166,38 @@ def normalize_pmf(pmfs):
         result = np.zeros(pmfs.shape, dtype=np.float64)
         result[nonzero,:] = (pmfs[nonzero,:].T / pmfs[nonzero,:].sum(axis=1)).T 
         return result 
+
+def normalize_flat_cdf(rt_tuples, cdf):
+    """
+    Normalize a flat CDF separately for each timestep. These CDFs, which are 
+    used by MINPACK for fitting, are typically an end-to-end concatenation of
+    CDFs corresponding to each timepoint.
+
+    args
+    ----
+        rt_tuples       :   2D ndarray, shape (n_points, 2), the set of
+                            independent variables used for fitting (generated
+                            by *generate_support*)
+        cdf             :   1D ndarray of shape (n_points), the CDF
+
+    returns
+    -------
+        1D ndarray, normalized CDF
+
+    """
+    unique_dt = np.unique(rt_tuples[:,1])
+    for t in unique_dt:
+
+        # Find the set of support points corresponding to this timepoint
+        match = rt_tuples[:,1]==t 
+
+        # Get the last point in the CDF corresponding to this timepoint
+        c = np.argmax(rt_tuples[match,0]) + match.nonzero()[0][0]
+
+        # Normalize
+        cdf[match] = cdf[match] / cdf[c]
+
+    return cdf 
 
 def radnorm(r, pdf, d=2):
     """
@@ -87,6 +233,10 @@ def radnorm(r, pdf, d=2):
     result = pdf * np.power(r, d-1)
     result /= result.sum()
     return result 
+
+###################################################
+## GENERATING PDFs FROM CHARACTERISTIC FUNCTIONS ##
+###################################################
 
 def pdf_from_cf(func_cf, x, **kwargs):
     """

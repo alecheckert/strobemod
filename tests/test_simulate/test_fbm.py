@@ -43,7 +43,7 @@ class TestMultivariateNormalRandomVector(unittest.TestCase):
         self.X3 = fbm.MultivariateNormalRandomVector(self.C3)
 
     def test_MultivariateNormalRandomVector_methods(self):
-        print("\ntesting strobemodels.simulate.fbm.MulivariateNormalRandomVector...")
+        print("\ntesting strobemodels.simulate.fbm.MultivariateNormalRandomVector...")
 
         # For convenience; testing data
         C = self.C 
