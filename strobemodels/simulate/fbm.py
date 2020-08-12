@@ -373,7 +373,7 @@ class FractionalBrownianMotion3D(object):
                 positions of each trajectory at each frame
 
         """
-        result = np.empty((n, self.fbm.track_len, 3), dtype=np.float64)
+        result = np.zeros((n, self.fbm.track_len, 3), dtype=np.float64)
         for d in range(3):
             result[:,1:,d] = self.fbm(n)[:,:-1]
         return result

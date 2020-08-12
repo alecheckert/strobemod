@@ -68,7 +68,7 @@ def strobe_infinite_plane(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_ou
     # Exclude molecules outside of the slice from observation by setting their
     # values to NaN
     if exclude_outside:
-        outside = np.zeros(n_tracks, dtype=np.bool)
+        outside = np.zeros(n_tracks, dtype="bool")
         for t in range(model_obj.track_len):
 
             # If a molecule is observed outside the slice once, it is lost for 
