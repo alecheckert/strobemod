@@ -47,8 +47,8 @@ def tracks_to_dataframe(positions, kill_nan=True):
 
     returns
     -------
-    	pandas.DataFrame with the columns "trajectory", "frame", "z0",
-    		"y0", "x0"
+    	pandas.DataFrame with the columns "trajectory", "frame", "z",
+    		"y", "x"
 
     """
     n_trajs, n_frames, n_dim = positions.shape
@@ -61,15 +61,54 @@ def tracks_to_dataframe(positions, kill_nan=True):
     M = n_trajs * n_frames
 
     # Format output dataframe
-    df = pd.DataFrame(index=np.arange(M), columns=["frame", "trajectory", "z0", "y0", "x0"])
+    df = pd.DataFrame(index=np.arange(M), columns=["frame", "trajectory", "z", "y", "x"])
     df["trajectory"] = df.index // n_frames
     df["frame"] = df.index % n_frames
-    df["z0"] = Z.T.ravel()
-    df["y0"] = Y.T.ravel()
-    df["x0"] = X.T.ravel()
+    df["z"] = Z.T.ravel()
+    df["y"] = Y.T.ravel()
+    df["x"] = X.T.ravel()
 
     # Remove NaN particles if desired
     if kill_nan:
-        df = df[~pd.isnull(df["z0"])]
+        df = df[~pd.isnull(df["z"])]
 
     return df
+
+def photobleach(tracks, k, frame_interval=None):
+    """
+    Simulate photobleaching for a set of trajectories by removing localizations
+    after the bleach.
+
+    Note that the 
+
+    args
+    ----
+        tracks          :   pandas.DataFrame
+        k               :   float, the photobleaching rate parameter
+        frame_interval  :   float, acquisition frame interval. If None, then 
+                            *k* is assumed to be the bleach probability per frame.
+                            If *frame_interval* is specified, then *k* is assumed
+                            to be in Hz.
+
+    note
+    ----
+        If *frame_interval* is specified, then we assume that the product 
+        k * frame_interval << 1 (bleaching is in the Poisson process regime).
+
+    returns
+    -------
+        pandas.DataFrame, with trajectories truncated as they photobleach
+
+    """
+    T = np.asarray(tracks["trajectory"])
+    keep = np.ones(T.shape, dtype='bool')
+    k_frame = k * frame_interval 
+    bleach = np.random.random(T.shape) < k_frame 
+    for t in np.unique(T):
+        w = T == t
+        if bleach[w].any():
+            start, stop = np.nonzero(w)[0][[0,-1]]
+            bleach_frame = np.argmax(bleach[w]) + start 
+            keep[bleach_frame:stop+1] = False 
+    return tracks[keep].copy()
+

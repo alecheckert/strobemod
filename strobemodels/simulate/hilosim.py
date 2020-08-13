@@ -52,7 +52,7 @@ def strobe_infinite_plane(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_ou
     returns
     -------
         if return_dataframe:
-            pandas.DataFrame with columns ["trajectory", "frame", "z0", "y0", "x0"]
+            pandas.DataFrame with columns ["trajectory", "frame", "z", "y", "x"]
         else:
             3D np.ndarray with shape (n_tracks, track_len, 3), the 3D positions
 
@@ -106,7 +106,7 @@ def strobe_one_state_infinite_plane(model, n_tracks, track_len=10, dz=0.7, dt=0.
     returns
     -------
         if return_dataframe:
-            pandas.DataFrame with columns ["trajectory", "frame", "z0", "y0", "x0"]
+            pandas.DataFrame with columns ["trajectory", "frame", "z", "y", "x"]
         else:
             3D np.ndarray with shape (n_tracks, track_len, 3), the 3D positions
 
@@ -141,7 +141,7 @@ def strobe_two_state_infinite_plane(model_0, n_tracks, model_1=None, f0=0.0, tra
     returns
     -------
         if return_dataframe:
-            pandas.DataFrame with columns ["trajectory", "frame", "z0", "y0", "x0"]
+            pandas.DataFrame with columns ["trajectory", "frame", "z", "y", "x"]
         else:
             3D np.ndarray with shape (n_tracks, track_len, 3), the 3D positions
 
@@ -201,7 +201,7 @@ def strobe_three_state_infinite_plane(model_0, n_tracks, model_1=None, model_2=N
     returns
     -------
         if return_dataframe:
-            pandas.DataFrame with columns ["trajectory", "frame", "z0", "y0", "x0"]
+            pandas.DataFrame with columns ["trajectory", "frame", "z", "y", "x"]
         else:
             3D np.ndarray with shape (n_tracks, track_len, 3), the 3D positions
 
