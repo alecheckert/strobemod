@@ -51,6 +51,115 @@ class TestSupportGeneration(unittest.TestCase):
         support = utils.generate_support(jump_bins, 0, dt)
         assert support.shape == (0, 2)
 
+class TestTrackTools(unittest.TestCase):
+    """
+    Test utilities that calculate the lengths and distributions of 
+    displacements for trajectories in a pandas.DataFrame.
+
+    tests:
+        - strobemodels.utils.track_length
+        - strobemodels.utils.rad_disp_histogram_2d
+
+    """
+    def test_track_length(self):
+        print("\ntesting strobemodels.utils.track_length...")
+
+        # A hypothetical trajectory dataframe
+        print("\ttesting for numerical correctness...")
+        tracks = pd.DataFrame(index=np.arange(10), columns=["trajectory"])
+        tracks["trajectory"] = np.array([0, 0, 0, 0, 1, 1, 1, 2, 3, 3])
+        tracks = utils.track_length(tracks)
+        testing.assert_allclose(
+            np.asarray(tracks["track_length"]),
+            np.array([4, 4, 4, 4, 3, 3, 3, 1, 2, 2])
+        )
+
+        # Make sure that this can be run, even if the dataframe already has
+        # a "track_length" column
+        print("\tchecking that track lengths are recalculated if they already exist...")
+        tracks.loc[6, "trajectory"] = 2
+        tracks = utils.track_length(tracks)
+        testing.assert_allclose(
+            np.asarray(tracks["track_length"]),
+            np.array([4, 4, 4, 4, 2, 2, 2, 2, 2, 2])
+        )
+
+        # Make sure that this can be run on an empty dataframe without errors
+        print("\tchecking that it doesn't fail with empty dataframes...")
+        tracks = pd.DataFrame(index=[], columns=["trajectory"])
+        tracks = utils.track_length(tracks)
+        assert tracks.empty 
+
+    def test_rad_disp_histogram_2d(self):
+        print("\ntesting strobemodels.utils.rad_disp_histogram_2d...")
+
+        # Some testing data
+        tracks = pd.DataFrame(index=np.arange(10), columns=["y", "x", "trajectory", "frame"])
+        tracks["trajectory"] = np.array([0,     0,    0,    0,   1,   1,   1,   2,   3,      3])
+        tracks["frame"] =      np.array([0,     1,    2,    3,   0,   1,   2,   5,   6,      7])
+        tracks["y"] =          np.array([0.0, 1.0,  1.0,  1.5, 0.0, 0.2, 0.0, 1.0, 1.5, 1.5000])
+        tracks["x"] =          np.array([0.0, 0.0, -1.0, -1.0, 0.2, 0.0, 0.2, 2.7, 1.5, 1.4995])
+
+        # Check for numerical correctness
+        print("\tchecking numerical correctness...")
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
+            pixel_size_um=1.0, first_only=True)
+
+        # Check the first frame interval
+        assert H[0,:].sum() == 3
+        H[0,0] == 1
+        H[0,282] == 1
+        H[0,1000] == 1
+        assert (H[0,~(np.isin(np.arange(5000), np.array([0, 282, 1000])))] == 0).all()
+
+        # Check the second frame interval 
+        assert H[1,:].sum() == 2 
+        assert H[1, 1414] == 1
+        assert H[1, 0] == 1
+        assert (H[1,~(np.isin(np.arange(5000), np.array([1414, 0])))] == 0).all()
+
+        # Check the third frame interval
+        assert H[2, :].sum() == 1
+        assert H[2, 1802] == 1
+        assert (H[2,~(np.isin(np.arange(5000), np.array([1802])))] == 0).all()
+
+        # Check the fourth frame interval
+        assert H[3,:].sum() == 0
+
+        # Check that when using all displacements we get the right answer
+        print("\tchecking numerical correctness when all displacements from each track are included...")
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
+            pixel_size_um=1.0, first_only=False)
+        assert H[0,0] == 1
+        assert H[0,282] == 2
+        assert H[0,1000] == 2 
+        assert H[0,500] == 1
+        assert (H[0,~(np.isin(np.arange(5000), np.array([0, 282, 1000, 500])))] == 0).all()
+
+        # Check that it acts sensibly when handed empty dataframes
+        print("\tstability test: handing it empty dataframes...")
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks[:0], n_frames=4, bin_size=0.001, max_jump=5.0,
+            pixel_size_um=1.0, first_only=False)
+        assert H.shape == (4, 5000)
+        assert H.sum() == 0
+
+        # Checks that it acts sensibly when handed jump lengths that exceed the maximum
+        # jump length bin
+        print("\tstability test: handing it tracks with very large jumps...")
+        tracks = pd.DataFrame(index=np.arange(10), columns=["y", "x", "trajectory", "frame"])
+        tracks["trajectory"] = np.array([0,     0,    0,    0,   1,   1,   1,   2,   3,      3])
+        tracks["frame"] =      np.array([0,     1,    2,    3,   0,   1,   2,   5,   6,      7])
+        tracks["y"] =          np.array([0.0, 1.0e3,  1.0,  1.5, 0.0, 0.2, 0.0, 1.0, 1.5, 1.5000])
+        tracks["x"] =          np.array([0.0, 0.0, -1.0, -1.0, 0.2, 0.0, 0.2, 2.7, 1.5, 1.4995])
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
+            pixel_size_um=1.0, first_only=True)
+        assert H.shape == (4, 5000)
+        assert H.sum() == 5
+        assert H[0,:].sum() == 2
+        H[0,0] == 1
+        H[0,282] == 1
+        assert (H[0,~(np.isin(np.arange(5000), np.array([0, 282])))] == 0).all()
+
 class TestBrownianDefocTools(unittest.TestCase):
     """
     Test utilities that enable the calculation of the fraction
