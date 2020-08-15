@@ -405,6 +405,47 @@ def pdf_from_cf_rad(func_cf, x, **kwargs):
     F = lambda j: func_cf(j, **kwargs)
     return HankelTrans3D.transform(F, x, ret_err=False, inverse=True)
 
+#########################################################
+## OTHER UTILITIES USEFUL IN THE CORE FITTING ROUTINES ##
+#########################################################
+
+def bounds_center(bounds, replace_inf=10.0):
+    """
+    Given a set of bounds on fit parameters - for instance,
+
+        bounds = (
+            np.array([0.0, 2.0]),
+            np.array([1.0, 10.0])
+        ),
+
+    return the vector of values centered between the upper and lower bounds. In the 
+    above example, that would be 
+
+        np.array([0.5, 6.0])
+
+    If the upper bound is np.inf, replace it with a value equal to the lower bound
+    plus *replace_inf*.
+
+    args
+    ----
+        bounds          :   2-tuple of 1D ndarray, the lower and upper bounds on 
+                            each parameter, suitable to passing to the *bounds*
+                            argument for scipy.optimize.curve_fit
+        replace_inf     :   float, treatment for np.inf values in the upper bounds
+
+    returns
+    -------
+        1D ndarray, the vector of bound centers
+
+    """
+    assert len(bounds[0]) == len(bounds[1])
+    n = len(bounds[0])
+    result = np.empty(n, dtype=np.float64)
+    for j in range(n):
+        lower = bounds[0][j]
+        upper = bounds[1][j] if not np.isinf(bounds[1][j]) else lower + replace_inf 
+        result[j] = (lower + upper) * 0.5
+    return result 
 
 
 

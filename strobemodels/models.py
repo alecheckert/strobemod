@@ -493,6 +493,7 @@ def pdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
 ## AVAILABLE MODELS ##
 ######################
 
+# Cumulative distribution functions
 CDF_MODELS = {
     "one_state_brownian": cdf_1state_brownian,
     "two_state_brownian": cdf_2state_brownian_uncorr,
@@ -500,6 +501,8 @@ CDF_MODELS = {
     "three_state_brownian": cdf_3state_brownian_uncorr,
     "three_state_brownian_zcorr": cdf_3state_brownian_zcorr,
 }
+
+# Probability density functions
 PDF_MODELS = {
     "one_state_brownian": pdf_1state_brownian,
     "two_state_brownian": pdf_2state_brownian_uncorr,
@@ -507,6 +510,53 @@ PDF_MODELS = {
     "three_state_brownian": pdf_3state_brownian_uncorr,
     "three_state_brownian_zcorr": pdf_3state_brownian_zcorr,   
 }
+
+# Identity of each fit parameter for each model 
+MODEL_PARS = {
+    "one_state_brownian": ["D", "loc_error"],
+    "two_state_brownian": ["f0", "D0", "D1", "loc_error"],
+    "two_state_brownian_zcorr": ["f0", "D0", "D1", "loc_error"],
+    "three_state_brownian": ["f0", "f1", "D0", "D1", "D2", "loc_error"],
+    "three_state_brownian_zcorr": ["f0", "f1", "D0", "D1", "D2", "loc_error"]
+}
+
+# Number of parameters per model
+MODEL_N_PARS = {k: len(MODEL_PARS[k]) for k in MODEL_PARS.keys()}
+
+# Naive bounds on fit parameters
+MODEL_PAR_BOUNDS = {
+    "one_state_brownian": (
+        np.array([1.0e-8, 0.0]),
+        np.array([np.inf, 0.1])
+    ),
+    "two_state_brownian": (
+        np.array([0.0, 1.0e-8, 0.5, 0.0]),
+        np.array([1.0, 0.005, np.inf, 0.1])
+    ),
+    "two_state_brownian_zcorr": (
+        np.array([0.0, 1.0e-8, 0.5, 0.0]),
+        np.array([1.0, 0.005, np.inf, 0.1])
+    ),
+    "three_state_brownian": (
+        np.array([0.0, 0.0, 1.0e-8, 0.05, 1.0, 0.0]),
+        np.array([1.0, 1.0, 0.02, 1.0, np.inf, 0.1])
+    ),
+    "three_state_brownian_zcorr": (
+        np.array([0.0, 0.0, 1.0e-8, 0.05, 1.0, 0.0]),
+        np.array([1.0, 1.0, 0.02, 1.0, np.inf, 0.1])
+    ),
+}
+
+# Naive parameter guesses to seed fits
+MODEL_GUESS = {
+    "one_state_brownian": np.array([1.0, 0.035]),
+    "two_state_brownian": np.array([0.3, 0.01, 1.0, 0.035]),
+    "two_state_brownian_zcorr": np.array([0.3, 0.001, 1.0, 0.035]),
+    "three_state_brownian": np.array([0.33, 0.33, 0.001, 0.5, 2.0, 0.035]),
+    "three_state_brownian_zcorr": np.array([0.33, 0.33, 0.001, 0.5, 2.0, 0.035]),
+}
+
+
 
 
 

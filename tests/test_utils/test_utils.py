@@ -263,7 +263,7 @@ class TestNormalizationMethods(unittest.TestCase):
         assert np.abs((result_norm.sum(axis=1) - 1.0)<1.0e-8).all()
 
     def test_normalize_flat_cdf(self):
-        print("\ttesting strobemodels.utils.normalize_flat_cdf...")
+        print("\ntesting strobemodels.utils.normalize_flat_cdf...")
 
         # A hypothetical CDF and a finite support
         rt_tuples = np.array([
@@ -278,6 +278,7 @@ class TestNormalizationMethods(unittest.TestCase):
 
         result = utils.normalize_flat_cdf(rt_tuples, cdf)
         expected = np.array([1.0/3, 2.0/3, 1.0])
+        print("\tis it correct?")
         assert (np.abs(result[:3] - expected) < 1.0e-10).all()
         assert (np.abs(result[3:] - expected) < 1.0e-10).all()
 
@@ -380,6 +381,46 @@ class TestCharacteristicFunctionUtilities(unittest.TestCase):
         pdf_gen = utils.radnorm(r, pdf_gen, d=3)
 
         testing.assert_allclose(pdf_real, pdf_gen, atol=1.0e-5)
+
+class TestMiscUtilities(unittest.TestCase):
+    """
+    Unit tests for other, miscellaneous utilities in the strobemodels.utils module.
+
+    tests:
+        - strobemodels.utils.bounds_center
+
+    """
+    def test_bounds_center(self):
+        print("\ntesting strobemodels.utils.bounds_center...")
+
+        # Simple test for correctness
+        print("\tchecking numerical correctness...")
+        bounds = (
+            np.array([0.0, 2.0]),
+            np.array([1.0, 10.0])
+        )
+        result = utils.bounds_center(bounds, replace_inf=10.0)
+        assert result.shape == (2,)
+        assert result[0] == 0.5
+        assert result[1] == 6.0
+
+        # Check that it behaves correctly when the upper bound is inf 
+        print("\tchecking that it behaves correctly when the upper bound is not finite...")
+        bounds = (
+            np.array([0.0, 2.0, 10.0]),
+            np.array([1.0, 10.0, np.inf])
+        )       
+        result = utils.bounds_center(bounds, replace_inf=10.0)
+        assert result.shape == (3,)
+        assert result[0] == 0.5 
+        assert result[1] == 6.0
+        assert result[2] == 15.0
+
+        # Check that it behaves correctly when run with no parameters
+        print("\tstability test: does it accept empty input?")
+        bounds = (np.array([]), np.array([]))
+        result = utils.bounds_center(bounds, replace_inf=10.0)
+        assert result.shape == (0,)
 
 
 
