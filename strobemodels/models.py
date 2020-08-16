@@ -136,7 +136,7 @@ def pdf_2state_brownian_uncorr(rt_tuples, f0, D0, D1, loc_error, **kwargs):
     pdf_1 = (rt_tuples[:,0] / var2_1) * np.exp(-r2 / (2 * var2_1))
     return f0 * pdf_0 + (1.0 - f0) * pdf_1 
 
-def cdf_3state_brownian_uncorr(rt_tuples, f0, f1, D0, D1, D3, loc_error, **kwargs):
+def cdf_3state_brownian_uncorr(rt_tuples, f0, f1, D0, D1, D2, loc_error, **kwargs):
     """
     Distribution function for the 2D radial displacements of a three-state
     Brownian motion with no state transitions.
@@ -210,7 +210,7 @@ def pdf_3state_brownian_uncorr(rt_tuples, f0, f1, D0, D1, D2, loc_error, **kwarg
     pdf_1 = (rt_tuples[:,0] / var_1) * np.exp(-r2 / (2 * var_1))
     pdf_2 = (rt_tuples[:,0] / var_2) * np.exp(-r2 / (2 * var_2))
 
-    return f0*pdf_0 + f1*pdf_1 * (1-f0-f1)*pdf_2
+    return f0*pdf_0 + f1*pdf_1 + (1-f0-f1)*pdf_2
 
 def cdf_2state_brownian_zcorr(rt_tuples, f0, D0, D1, loc_error,
     dz=0.7, frame_interval=0.01, **kwargs):
@@ -450,6 +450,7 @@ def pdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
     le2 = loc_error ** 2
     var_0 = 2 * (D0 * rt_tuples[:,1] + le2)
     var_1 = 2 * (D1 * rt_tuples[:,1] + le2)
+    var_2 = 2 * (D2 * rt_tuples[:,1] + le2)
     r2 = rt_tuples[:,0] ** 2
 
     # PDFs for each state
