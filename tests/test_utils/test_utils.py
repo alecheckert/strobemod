@@ -51,6 +51,51 @@ class TestSupportGeneration(unittest.TestCase):
         support = utils.generate_support(jump_bins, 0, dt)
         assert support.shape == (0, 2)
 
+class TestCoarsenHistogram(unittest.TestCase):
+    """
+    Given a histogram of jump lengths, aggregate so that the result is a 
+    histogram with fewer bins.
+
+    tests:
+        - strobemodels.utils.coarsen_histogram
+
+    """
+    def test_coarsen_histogram(self):
+        print("\nttesting strobemodels.utils.coarsen_histogram...")
+
+        # Get some testing data
+        test_file = os.path.join(utils.FIXTURE_DIR, "one_state_infinite_plane_brownian_10000tracks_dt-0.01_D-2.0_locerror-0.035.csv")
+        tracks = pd.read_csv(test_file)
+
+        # Accumulate a jump length histogram
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4,
+            bin_size=0.001, max_jump=5.0, pixel_size_um=1.0, first_only=True)
+
+        # Run aggregation, with 20 bins in the old histogram to 1 bin in the 
+        # new one
+        print("\ttest case: the aggregation factor goes evenly into the number of bins...")
+        H_new, bin_edges_new = utils.coarsen_histogram(H, bin_edges, 20)
+        assert H_new.shape == (4, 250)
+        assert bin_edges_new.shape == (251,)
+
+        # The first 20 bins of the original histogram should add up to the first
+        # bin of the new histogram
+        assert (H[:,:20].sum(axis=1) == H_new[:,0]).all()
+
+        # Do this for a few more test cases
+        for j in range(1, 250):
+            assert (H[:,20*j:20*(j+1)].sum(axis=1) == H_new[:,j]).all()
+
+        # Run aggregation, with 30 bins in the old histogram to 1 bin in the
+        # new histogram. This time, we'll need to truncate the last part of 
+        # the old histogram, since 30 doesn't go evenly into 5000
+        print("\ttest case: the aggregation factor does not go evenly into the number of bins...")
+        H_new, bin_edges_new = utils.coarsen_histogram(H, bin_edges, 30)
+        assert H_new.shape == (4, 166)
+        assert bin_edges_new.shape == (167,)
+        for j in range(166):
+            assert (H[:,30*j:30*(j+1)].sum(axis=1) == H_new[:,j]).all()
+
 class TestTrackTools(unittest.TestCase):
     """
     Test utilities that calculate the lengths and distributions of 

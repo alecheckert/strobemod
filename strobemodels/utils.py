@@ -13,10 +13,19 @@ HankelTrans3D = SymmetricFourierTransform(ndim=3, N=10000, h=0.005)
 # Univariate spline interpolation
 from scipy.interpolate import InterpolatedUnivariateSpline as spline 
 
-# hilonom package directory
+# strobemodels package directory
 PACKAGE_DIR = os.path.split(os.path.abspath(__file__))[0]
 
-# Data directory with immutable config stuff
+# strobemodels repo top-level directory
+REPO_DIR = os.path.split(PACKAGE_DIR)[0]
+
+# strobemodels testing directory
+TEST_DIR = os.path.join(REPO_DIR, "tests")
+
+# strobemodels fixtures for tests
+FIXTURE_DIR = os.path.join(TEST_DIR, "fixtures")
+
+# data directory with config stuff
 DATA_DIR = os.path.join(PACKAGE_DIR, "data")
 
 ########################
@@ -53,6 +62,47 @@ def generate_support(jump_bins, n_frames, frame_interval):
         rt_tuples[t*n_jump_bins : (t+1)*n_jump_bins, 0] = jump_bins[1:]
         rt_tuples[t*n_jump_bins : (t+1)*n_jump_bins, 1] = (t+1) * frame_interval 
     return rt_tuples 
+
+def coarsen_histogram(jump_length_histo, bin_edges, factor):
+    """
+    Given a jump length histogram with many small bins, aggregate into a 
+    histogram with a small number of larger bins.
+
+    This is useful for visualization.
+
+    args
+    ----
+        jump_length_histo       :   2D ndarray, the jump length histograms
+                                    indexed by (frame interval, jump length bin)
+        bin_edges               :   1D ndarray, the edges of each jump length
+                                    bin in *jump_length_histo*
+        factor                  :   int, the number of bins in the old histogram
+                                    to aggregate for each bin of the new histogram
+
+    returns
+    -------
+        (
+            2D ndarray, the aggregated histogram,
+            1D ndarray, the edges of each jump length bin the aggregated histogram
+        )
+
+    """
+    # Get the new set of bin edges
+    n_frames, n_bins_orig = jump_length_histo.shape 
+    bin_edges_new = bin_edges[::factor]
+    n_bins_new = bin_edges_new.shape[0] - 1
+
+    # May need to truncate the histogram at the very end, if *factor* doesn't
+    # go cleanly into the number of bins in the original histogram
+    H_old = jump_length_histo[:, (bin_edges<bin_edges_new[-1])[:-1]]
+
+    # Aggregate the histogram
+    H = np.zeros((n_frames, n_bins_new), dtype=jump_length_histo.dtype)
+    for j in range(factor):
+        H = H + H_old[:, j::factor]
+
+    return H, bin_edges_new 
+
 
 #############################################
 ## GENERATE RADIAL DISPLACEMENT HISTOGRAMS ##
@@ -164,7 +214,6 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
         H[t-1,:] = np.histogram(r_disps, bins=bin_edges)[0]
 
     return H, bin_edges 
-
 
 ###############################
 ## DIFFUSION MODEL UTILITIES ##
