@@ -52,10 +52,10 @@ class TestStrobeInfinitePlane(unittest.TestCase):
 
         # Check that none of the z-positions lie outside the focal slice
         print("\tchecking that defocalized particles are removed...")
-        assert (np.abs(tracks["z0"]) <= hz).all()
+        assert (np.abs(tracks["z"]) <= hz).all()
 
         # Check that all particles start at the origin in the XY plane
-        assert (np.asarray(tracks.groupby('trajectory')[['y0', 'x0']].first()) == 0.0).all()
+        assert (np.asarray(tracks.groupby('trajectory')[['y', 'x']].first()) == 0.0).all()
 
         # Check that we can return trajectories as an ndarray
         print("\tchecking the ability to return as ndarray...")
@@ -90,7 +90,7 @@ class TestStrobeInfinitePlane(unittest.TestCase):
             dz=dz, dt=dt, loc_error=loc_error, exclude_outside=True, return_dataframe=True, D=D)
 
         assert isinstance(tracks, pd.DataFrame)
-        assert (np.abs(tracks['z0']) <= hz).all()
+        assert (np.abs(tracks['z']) <= hz).all()
 
     def test_strobe_two_state_infinite_plane(self):
         print("\ntesting strobemodels.simulate.hilosim.strobe_two_state_infinite_plane...")
@@ -103,7 +103,7 @@ class TestStrobeInfinitePlane(unittest.TestCase):
             f0=0.5, dz=0.7, dt=0.01, loc_error=0.0, model_0_kwargs=model_0_kwargs,
             model_1_kwargs=model_1_kwargs, return_dataframe=True, exclude_outside=True)
         assert isinstance(tracks, pd.DataFrame)
-        assert (np.abs(tracks['z0']) <= 0.7/2).all()       
+        assert (np.abs(tracks['z']) <= 0.7/2).all()       
 
     def test_strobe_three_state_infinite_plane(self):
         print("\ntesting strobemodels.simulate.hilosim.strobe_three_state_infinite_plane...")
@@ -118,4 +118,4 @@ class TestStrobeInfinitePlane(unittest.TestCase):
             model_1_kwargs=model_1_kwargs, model_2_kwargs=model_2_kwargs,
             return_dataframe=True, exclude_outside=True)
         assert isinstance(tracks, pd.DataFrame)
-        assert (np.abs(tracks['z0']) <= 0.7/2).all()       
+        assert (np.abs(tracks['z']) <= 0.7/2).all()       

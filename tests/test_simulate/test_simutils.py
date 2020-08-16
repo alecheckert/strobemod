@@ -75,15 +75,15 @@ class TestSimUtils(unittest.TestCase):
         tracks = simutils.tracks_to_dataframe(positions, kill_nan=True)
         for t, track in tracks.groupby("trajectory"):
             assert_allclose(
-                np.asarray(track['z0']),
+                np.asarray(track['z']),
                 positions[t,:,0]
             )
             assert_allclose(
-                np.asarray(track['y0']),
+                np.asarray(track['y']),
                 positions[t,:,1]
             )
             assert_allclose(
-                np.asarray(track['x0']),
+                np.asarray(track['x']),
                 positions[t,:,2]
             )
             assert_allclose(

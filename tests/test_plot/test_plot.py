@@ -98,7 +98,7 @@ class TestPMFCDFPlots(unittest.TestCase):
         print("\ttesting with model overlay...")
         fig, axes = plot.plot_jump_length_cdf(bin_edges, cdfs, model_cdfs=model_cdfs,
             model_bin_edges=bin_edges, out_png=None, **kwargs)
-        plt.show(); plt.close('all')
+        plt.close('all')
 
         # Try to save
         print("\ttesting with plot saving...")
