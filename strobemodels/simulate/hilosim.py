@@ -19,6 +19,7 @@ import pandas as pd
 from strobemodels.simulate.simutils import tracks_to_dataframe
 from strobemodels.simulate import fbm 
 from strobemodels.simulate import levy
+from strobemodels.utils import concat_tracks 
 
 # Available diffusion simulators
 DIFFUSION_MODELS = {
@@ -156,17 +157,15 @@ def strobe_two_state_infinite_plane(model_0, n_tracks, model_1=None, f0=0.0, tra
 
     # Generate simulators for each state
     model_obj_0 = DIFFUSION_MODELS[model_0](dt=dt, track_len=track_len, **model_0_kwargs)
-    model_obj_1 = DIFFUSION_MODELS[model_1](dt=dt, track_len=track_len, **model_1_kwargs)
-
-    # Run the simulations
     tracks_0 = strobe_infinite_plane(model_obj_0, N0, dz=dz, loc_error=loc_error,
-        exclude_outside=exclude_outside, return_dataframe=return_dataframe)
+        exclude_outside=exclude_outside, return_dataframe=return_dataframe)   
+    model_obj_1 = DIFFUSION_MODELS[model_1](dt=dt, track_len=track_len, **model_1_kwargs)
     tracks_1 = strobe_infinite_plane(model_obj_1, N1, dz=dz, loc_error=loc_error,
         exclude_outside=exclude_outside, return_dataframe=return_dataframe)
 
     # Concatenate trajectories from both states
     if isinstance(tracks_0, pd.DataFrame):
-        tracks = pd.concat([tracks_0, tracks_1], axis=0, sort=True)
+        tracks = concat_tracks(tracks_0, tracks_1)
     else:
         tracks = np.concatenate([tracks_0, tracks_1], axis=0)
 
@@ -230,19 +229,9 @@ def strobe_three_state_infinite_plane(model_0, n_tracks, model_1=None, model_2=N
 
     # Concatenate trajectories from both states
     if isinstance(tracks_0, pd.DataFrame):
-        tracks = pd.concat([tracks_0, tracks_1, tracks_2], axis=0, sort=True)
+        tracks = concat_tracks(tracks_0, tracks_1, tracks_2)
     else:
         tracks = np.concatenate([tracks_0, tracks_1, tracks_2], axis=0)
 
     return tracks 
-
-
-
-
-
-
-
-
-
-
 

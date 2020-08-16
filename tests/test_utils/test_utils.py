@@ -467,7 +467,35 @@ class TestMiscUtilities(unittest.TestCase):
         result = utils.bounds_center(bounds, replace_inf=10.0)
         assert result.shape == (0,)
 
+    def test_concat_tracks(self):
+        print("\ntesting strobemodels.utils.concat_tracks...")
 
+        # Some sample data
+        tracks_0 = pd.DataFrame(index=np.arange(5), columns=["frame", "trajectory", "x", "y"])
+        tracks_1 = pd.DataFrame(index=np.arange(7), columns=["frame", "trajectory", "x", "y"])
 
+        tracks_0["frame"]      = [0, 1, 2, 0, 1]
+        tracks_0["trajectory"] = [0, 0, 0, 1, -1]
+        tracks_0["y"]          = [0.5, 1.5, 4.5, 6.5, 10.5]
+        tracks_0["x"]          = [0.5, 1.5, 4.5, 6.5, 10.5]
 
+        tracks_1["frame"]      = [0, 1, 2, 0, 1, 0, 1]
+        tracks_1["trajectory"] = [0, 0, 0, 1, 1, -1, 2]
+        tracks_1["y"]          = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+        tracks_1["x"]          = [0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
+
+        tracks = utils.concat_tracks(tracks_0, tracks_1)
+        for t in [-1, 0, 1, 2, 3, 4]:
+            assert t in tracks["trajectory"].unique().tolist()
+        assert len(tracks) == len(tracks_0) + len(tracks_1)
+        testing.assert_allclose(
+            np.asarray(tracks.loc[tracks["dataframe_index"] == 0, ["frame", "trajectory", "x", "y"]]),
+            np.asarray(tracks_0[["frame", "trajectory", "x", "y"]]),
+            rtol=1.0e-10
+        )
+        testing.assert_allclose(
+            np.asarray(tracks.loc[tracks["dataframe_index"] == 0, ["frame", "x", "y"]]),
+            np.asarray(tracks_0[["frame", "x", "y"]]),
+            rtol=1.0e-10
+        )
 
