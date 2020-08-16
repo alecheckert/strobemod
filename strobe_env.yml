@@ -1,0 +1,18 @@
+# strobe_env.yml
+name: strobe_env
+channels:
+  - conda
+  - conda-forge
+dependencies:
+  - python
+  - numpy
+  - mkl
+  - pandas
+  - hankel 
+  - dask
+  - scipy
+  - matplotlib
+  - seaborn 
+  - nose2
+  - tqdm
+  
