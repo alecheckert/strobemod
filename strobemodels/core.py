@@ -9,7 +9,7 @@ import os
 import numpy as np 
 
 # Least-squares fitting
-from scipy.optimize import curve_fit 
+from scipy.optimize import curve_fit, minimize 
 
 # Dataframes
 import pandas as pd 
@@ -21,8 +21,11 @@ import matplotlib.pyplot as plt
 from .utils import (
     normalize_pmf,
     generate_support,
+    rad_disp_2d,
     rad_disp_histogram_2d,
     bounds_center,
+    bounds_transpose,
+    bounds_antitranspose,
     coarsen_histogram
 )
 from .models import (
@@ -42,7 +45,9 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
     pixel_size_um=0.16, bounds=None, guess=None, plot=False, show_plot=True, save_png=None, 
     weight_timesteps=False, weight_short_disps=False, max_jump=5.0, **model_kwargs):
     """
-    Fit a set of trajectories to a diffusion model, returning the fit parameters.
+    Fit a set of trajectories to a diffusion model by minimizing the squared deviation
+    between the experimental and model CDFs at each of a set of time points. Return
+    the final fit parameters and the corresponding model.
 
     args
     ----
@@ -227,5 +232,147 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
     fit_pars = {s: v for s, v in zip(MODEL_PARS[model], popt)}
     return fit_pars, bin_edges, cdfs, pmfs, model_cdf_eval, model_pmf_eval 
 
+def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
+    pixel_size_um=0.16, bounds=None, guess=None, plot=False, show_plot=True,
+    save_png=None, **model_kwargs):
+    """
+    Given a diffusion model, estimate the model parameters that maximize the likelihood
+    of the observed trajectories. Return the final fit parameters along with the 
+    corresponding model.
 
+    args
+    ----
+        tracks              :   pandas.DataFrame, trajectories
+        model               :   str, the diffusion model to fit
+        n_frames            :   int, the maximum number of frame intervals to consider
+                                when modeling displacements
+        frame_interval      :   float, time between frames in seconds
+        pixel_size_um       :   float, size of pixels in um
+        bounds              :   2-tuple of 1D ndarray, the lower and upper bounds on 
+                                the parameter estimates
+        guess               :   1D ndarray or list of 1D ndarray, the guess vectors 
+                                from which to seed the iterative fitting algorithm
+        plot                :   bool, make a plot of the fits
+        show_plot           :   bool, show the plot of the fits to user, if *show_plot*.
+                                If False, then the plot is saved if *save_png* and otherwise
+                                discarded.
+        save_png            :   str, path to save the plot to. If *None*, the plot is 
+                                not saved.
+        model_kwargs        :   special arguments accepted by model function
+
+    returns
+    -------
+        (
+            dict, the final fit parameters;
+            1D ndarray, the edges of each spatial bin in um;
+            2D ndarray, the data CDF indexed by (time, jump length);
+            2D ndarray, the data PMF indexed by (time, jump length);
+            2D ndarray, the model CDF indexed by (time, jump length);
+            2D ndarray, the model PMF indexed by (time, jump length)
+        )
+
+    """
+    # Calculate the radial displacements for each frame interval
+    jumps = rad_disp_2d(tracks, n_frames=n_frames, frame_interval=frame_interval, 
+        pixel_size_um=pixel_size_um, first_only=True)
+
+    # Define the model functions
+    kwargs = {
+        "frame_interval": frame_interval,
+        **model_kwargs 
+    }
+    model_cdf = lambda *args: CDF_MODELS[model](*args, **kwargs)
+    model_pmf = lambda *args: PDF_MODELS[model](*args, **kwargs)
+
+    # Define the function to minimize - the summed negative log likelihood
+    # for all observations
+    def score(args):
+        return -np.log(model_pmf(jumps, *args)).sum()
+
+    # Choose the initial parameter bounds
+    if bounds is None:
+        bounds = bounds_transpose(MODEL_PAR_BOUNDS[model])
+
+    # Choose the initial guess
+    if guess is None:
+        guess = [MODEL_GUESS[model]]
+    elif isinstance(guess, np.ndarray):
+        guess = [guess]
+    else:
+        assert isinstance(guess, list)
+
+    # Check that the parameter guesses are valid for this choice of bounds
+    def in_bounds(gu):
+        return all([(gu[i]>=bounds[i][0]) and (gu[i]<=bounds[i][1]) for i in range(len(gu))])
+    guess = [gu for gu in guess if in_bounds(gu)]
+
+    # If no guesses remain, choose the center of the bounds
+    if len(guess) == 0:
+        guess = [bounds_center(bounds_antitranspose(bounds))]
+
+    # Run minimization
+    min_val = 0.0
+    min_pars = None 
+    for i, g in enumerate(guess):
+        try:
+            re = minimize(score, g, bounds=bounds)
+            if re.fun <= min_val:
+                min_pars = re.x 
+                min_val = re.fun 
+        except:
+            continue 
+
+    # Pathology
+    if min_pars is None:
+        print("Optimal fit parameters not found")
+        fit_pars = {k: np.nan for k in MODEL_PARS[model]}
+        return fit_pars, bin_edges, cdfs, pmfs, np.zeros(cdfs.shape), np.zeros(pmfs.shape)
+    else:
+        fit_pars = {k: v for k, v in zip(MODEL_PARS[model], min_pars)}
+
+    # Evaluate the model CDF/PMF at the final parameter estimate. The PMF is
+    # approximated by evaluating the PDF at the center of each spatial bin, then 
+    # multiplying by the bin size 
+    bin_size = 0.001  # um 
+    H, bin_edges = rad_disp_histogram_2d(tracks, n_frames=n_frames, bin_size=bin_size,
+        pixel_size_um=pixel_size_um, max_jump=5.0, first_only=True)
+    n_bins = bin_edges.shape[0] - 1
+    pmfs = normalize_pmf(H)
+    cdfs = np.cumsum(pmfs, axis=1)
+    rt_tuples = generate_support(bin_edges, n_frames, frame_interval)
+    model_cdf_eval = model_cdf(rt_tuples, *min_pars).reshape(H.shape)
+    rt_tuples[:,0] -= bin_size * 0.5
+    model_pmf_eval = model_pmf(rt_tuples, *min_pars).reshape(H.shape) * bin_size 
+
+    # Show the result graphically, if desired
+    if plot:
+
+        # Coarsen the histogram for the purpose of visualization
+        pmf_coarse, bin_edges_coarse = coarsen_histogram(pmfs, bin_edges, 20)
+
+        # If the user wants to the save the plot, create names for the output PMF and CDF
+        # plots
+        if not save_png is None:
+            out_png_pmf = "{}_pmf.png".format(os.path.splitext(save_png)[0])
+            out_png_cdf = "{}_cdf.png".format(os.path.splitext(save_png)[0])
+        else:
+            out_png_pmf = out_png_cdf = None 
+
+        # Plot the PMF
+        fig, axes = plot_jump_length_pmf(bin_edges_coarse, pmf_coarse, model_pmfs=model_pmf_eval,
+            model_bin_edges=bin_edges, frame_interval=frame_interval, max_jump=2.0,
+            cmap="gray", figsize_mod=1.0, out_png=out_png_pmf)
+
+        # Plot the CDF
+        fig, axes = plot_jump_length_cdf(bin_edges, cdfs, model_cdfs=model_cdf_eval,
+            model_bin_edges=None, frame_interval=frame_interval, max_jump=5.0, cmap="gray",
+            figsize_mod=1.0, out_png=out_png_cdf, fontsize=8)
+
+        # Show to user
+        if show_plot:
+            plt.show()
+        plt.close("all")
+
+    # Format output
+    return fit_pars, bin_edges, cdfs, pmfs, model_cdf_eval, model_pmf_eval 
 

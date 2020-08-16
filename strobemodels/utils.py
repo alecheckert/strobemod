@@ -619,8 +619,47 @@ def bounds_center(bounds, replace_inf=10.0):
         result[j] = (lower + upper) * 0.5
     return result 
 
+def bounds_transpose(bounds):
+    """
+    Transpose a set of parameter bounds from the format expected by scipy.optimize.curve_fit
+    to the format expected by scipy.optimize.minimize.
 
+    example
+    -------
+    Input:
+        bounds = (np.array([0.0, 0.1]), np.array([np.inf, 0.2]))
 
+    Output:
+        ((0.0, np.inf), (0.1, 0.2))
+
+    args
+    ----
+        bounds      :   2-tuple of 1D ndarray, the lower and upper bounds on each parameter
+
+    returns
+    -------
+        list of (min, max) bound pairs for each parameter
+
+    """
+    return [(bounds[0][i], bounds[1][i]) for i in range(len(bounds[0]))]
+
+def bounds_antitranspose(bounds):
+    """
+    Inverse to *bounds_transpose*.
+
+    args
+    ----
+        bounds      :   list of (min, max) bound pairs for each fit parameter
+
+    returns
+    -------
+        2-tuple of 1D ndarray, the lower and upper bounds on each parameter
+
+    """
+    return (
+        np.array([bounds[i][0] for i in range(len(bounds))]),
+        np.array([bounds[i][1] for i in range(len(bounds))])
+    )
 
 
 
