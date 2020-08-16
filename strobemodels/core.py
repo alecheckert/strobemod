@@ -14,12 +14,16 @@ from scipy.optimize import curve_fit
 # Dataframes
 import pandas as pd 
 
+# Plotting
+import matplotlib.pyplot as plt 
+
 # Package utilities
 from .utils import (
     normalize_pmf,
     generate_support,
     rad_disp_histogram_2d,
-    bounds_center 
+    bounds_center,
+    coarsen_histogram
 )
 from .models import (
     CDF_MODELS,
@@ -29,9 +33,13 @@ from .models import (
     MODEL_PAR_BOUNDS,
     MODEL_GUESS
 )
+from .plot import (
+    plot_jump_length_pmf,
+    plot_jump_length_cdf 
+)
 
 def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
-    pixel_size_um=0.16, bounds=None, guess=None, plot=False, save_png=None, 
+    pixel_size_um=0.16, bounds=None, guess=None, plot=False, show_plot=True, save_png=None, 
     weight_timesteps=False, weight_short_disps=False, max_jump=5.0, **model_kwargs):
     """
     Fit a set of trajectories to a diffusion model, returning the fit parameters.
@@ -48,7 +56,10 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
                                 the parameter estimates
         guess               :   1D ndarray or list of 1D ndarray, the guess vectors 
                                 from which to seed the iterative fitting algorithm
-        plot                :   bool, show a plot of the fits
+        plot                :   bool, make a plot of the fits
+        show_plot           :   bool, show the plot of the fits to user, if *show_plot*.
+                                If False, then the plot is saved if *save_png* and otherwise
+                                discarded.
         save_png            :   str, path to save the plot to. If *None*, the plot is 
                                 not saved.
         weight_timesteps    :   bool, weight fits in each frame interval by the number
@@ -78,7 +89,7 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
     # Catch pathological input: if there are no recorded displacements, then return
     # NaNs for all parameter estimates
     if H[0,:].sum() == 0:
-        return {k: 0 for k in MODEL_PARS[model]}, None, None, None, None, None 
+        return {k: np.nan for k in MODEL_PARS[model]}, None, None, None, None, None 
 
     # Reduce the number of timepoints, if there are no displacements in the later bins
     t = 0
@@ -127,7 +138,13 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
 
     # If no guesses remain, choose the center of the bounds
     if len(guess) == 0:
-        guess = bounds_center(bounds)
+        guess = [bounds_center(bounds)]
+
+    # If any of the parameters are completely constrained, make sure that the upper
+    # bound is strictly greater than the lower bound to avoid scipy.optimize errors
+    for j in range(len(bounds[0])):
+        if bounds[1][j] - bounds[0][j] == 0.0:
+            bounds[1][j] += 1.0e-10
 
     # If weighting by the number of observations in each frame interval, set the 
     # variance on the CDFs in each bin to be inversely proportional to the number of 
@@ -141,9 +158,13 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
     else:
         sigma = None 
 
-    # Optionally, bias the fit toward
+    # Optionally, bias the fit toward the shorter end of the jump length distribution
     if weight_short_disps:
-        raise NotImplementedError
+        if sigma is None:
+            sigma = np.ones(rt_tuples.shape[0], dtype=np.float64)
+            sigma[rt_tuples[:,0]<=0.5] = 0.25
+        else:
+            sigma[rt_tuples[:,0]<=0.5] = sigma[rt_tuples[:,0]<=0.5] * 0.25
 
     # For each initial parameter guess, seed a LS fit and the guess with the lowest
     # sum squared deviation at the end
@@ -175,23 +196,36 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
 
     # Show the result graphically, if desired
     if plot:
-        raise NotImplementedError 
+
+        # Coarsen the histogram for the purpose of visualization
+        pmf_coarse, bin_edges_coarse = coarsen_histogram(pmfs, bin_edges, 20)
+
+        # If the user wants to the save the plot, create names for the output PMF and CDF
+        # plots
+        if not save_png is None:
+            out_png_pmf = "{}_pmf.png".format(os.path.splitext(save_png)[0])
+            out_png_cdf = "{}_cdf.png".format(os.path.splitext(save_png)[0])
+        else:
+            out_png_pmf = out_png_cdf = None 
+
+        # Plot the PMF
+        fig, axes = plot_jump_length_pmf(bin_edges_coarse, pmf_coarse, model_pmfs=model_pmf_eval,
+            model_bin_edges=bin_edges, frame_interval=frame_interval, max_jump=2.0,
+            cmap="gray", figsize_mod=1.0, out_png=out_png_pmf)
+
+        # Plot the CDF
+        fig, axes = plot_jump_length_cdf(bin_edges, cdfs, model_cdfs=model_cdf_eval,
+            model_bin_edges=None, frame_interval=frame_interval, max_jump=5.0, cmap="gray",
+            figsize_mod=1.0, out_png=out_png_cdf, fontsize=8)
+
+        # Show to user
+        if show_plot:
+            plt.show()
+        plt.close("all")
 
     # Format output
     fit_pars = {s: v for s, v in zip(MODEL_PARS[model], popt)}
     return fit_pars, bin_edges, cdfs, pmfs, model_cdf_eval, model_pmf_eval 
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
