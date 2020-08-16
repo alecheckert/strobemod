@@ -135,6 +135,41 @@ class TestTrackTools(unittest.TestCase):
         tracks = utils.track_length(tracks)
         assert tracks.empty 
 
+    def test_rad_disp_2d(self):
+        print("\ntesting strobemodels.utils.rad_disp_2d...")
+
+        # Some testing data
+        tracks = pd.DataFrame(index=np.arange(10), columns=["y", "x", "trajectory", "frame"])
+        tracks["trajectory"] = np.array([0,     0,    0,    0,   1,   1,   1,   2,   3,      3])
+        tracks["frame"] =      np.array([0,     1,    2,    3,   0,   1,   2,   5,   6,      7])
+        tracks["y"] =          np.array([0.0, 1.0,  1.0,  1.5, 0.0, 0.2, 0.0, 1.0, 1.5, 1.5000])
+        tracks["x"] =          np.array([0.0, 0.0, -1.0, -1.0, 0.2, 0.0, 0.2, 2.7, 1.5, 1.4995])
+
+        # Check that we get the right displacements
+        print("\tchecking numerical correctness...")
+        result = utils.rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=1.0,
+            first_only=True)
+        assert (result[:,1] == 0.01).sum() == 3
+        assert (result[:,1] == 0.02).sum() == 2
+        assert (result[:,1] == 0.03).sum() == 1
+        assert (result[:,1] == 0.04).sum() == 0
+        single_disps = result[result[:,1] == 0.01, 0]
+        testing.assert_allclose(
+            result[result[:,1] == 0.01, 0],
+            np.array([1.0, np.sqrt(2 * 0.2**2), 0.0005]),
+            atol=1.0e-6
+        )
+        testing.assert_allclose(
+            result[result[:,1] == 0.02, 0],
+            np.array([np.sqrt(2), 0.0]),
+            atol=1.0e-6
+        )
+        testing.assert_allclose(
+            result[result[:,1] == 0.03, 0],
+            np.array([np.sqrt(1.5**2 + 1.0)]),
+            atol=1.0e-6
+        )       
+
     def test_rad_disp_histogram_2d(self):
         print("\ntesting strobemodels.utils.rad_disp_histogram_2d...")
 
