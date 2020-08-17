@@ -117,7 +117,7 @@ def strobe_one_state_infinite_plane(model, n_tracks, track_len=10, dz=0.7, dt=0.
         exclude_outside=exclude_outside, return_dataframe=return_dataframe)
     
 def strobe_two_state_infinite_plane(model_0, n_tracks, model_1=None, f0=0.0, track_len=10,
-    dz=0.7, dt=0.01, loc_error=0.0, exclude_outside=True, return_dataframe=False, 
+    dz=0.7, dt=0.01, loc_error=0.0, exclude_outside=True, return_dataframe=True, 
     model_0_kwargs={}, model_1_kwargs={}):
     """
     Simulate two diffusing states in a HiLo geometry.
@@ -172,7 +172,7 @@ def strobe_two_state_infinite_plane(model_0, n_tracks, model_1=None, f0=0.0, tra
     return tracks 
 
 def strobe_three_state_infinite_plane(model_0, n_tracks, model_1=None, model_2=None, f0=0.0, f1=0.0,
-    track_len=10, dz=0.7, dt=0.01, loc_error=0.0, exclude_outside=True, return_dataframe=False,
+    track_len=10, dz=0.7, dt=0.01, loc_error=0.0, exclude_outside=True, return_dataframe=True,
     model_0_kwargs={}, model_1_kwargs={}, model_2_kwargs={}):
     """
     Simulate three diffusing states in a HiLo geometry.
