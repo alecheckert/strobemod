@@ -64,7 +64,8 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
         plot                :   bool, make a plot of the fits
         show_plot           :   bool, show the plot of the fits to user, if *show_plot*.
                                 If False, then the plot is saved if *save_png* and otherwise
-                                discarded.
+                                discarded. This is useful for testing the plotting capabilities
+                                of this function without actually showing the plot.
         save_png            :   str, path to save the plot to. If *None*, the plot is 
                                 not saved.
         weight_timesteps    :   bool, weight fits in each frame interval by the number
@@ -255,7 +256,8 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
         plot                :   bool, make a plot of the fits
         show_plot           :   bool, show the plot of the fits to user, if *show_plot*.
                                 If False, then the plot is saved if *save_png* and otherwise
-                                discarded.
+                                discarded. This is useful for testing the plotting capabilities
+                                of this function without actually opening the plot.
         save_png            :   str, path to save the plot to. If *None*, the plot is 
                                 not saved.
         model_kwargs        :   special arguments accepted by model function
@@ -287,11 +289,21 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
     # Define the function to minimize - the summed negative log likelihood
     # for all observations
     def score(args):
-        return -np.log(model_pmf(jumps, *args)).sum()
+        likelihood = model_pmf(jumps, *args)
+        return -np.log(likelihood[(likelihood>0) & (~np.isnan(likelihood))]).sum()
 
     # Choose the initial parameter bounds
     if bounds is None:
-        bounds = bounds_transpose(MODEL_PAR_BOUNDS[model])
+        bounds = MODEL_PAR_BOUNDS[model]
+
+    # Ensure that the upper bound is strictly greater than the lower bound, 
+    # required by the minimization methods
+    for j in range(len(bounds[0])):
+        if bounds[1][j] == bounds[0][j]:
+            bounds[1][j] = bounds[1][j] + 1.0e-10
+
+    # Convert to the format expected by scipy.minimize
+    bounds = bounds_transpose(bounds)
 
     # Choose the initial guess
     if guess is None:
@@ -322,11 +334,11 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
         except:
             continue 
 
-    # Pathology
+    # Catch failed fits
     if min_pars is None:
         print("Optimal fit parameters not found")
         fit_pars = {k: np.nan for k in MODEL_PARS[model]}
-        return fit_pars, bin_edges, cdfs, pmfs, np.zeros(cdfs.shape), np.zeros(pmfs.shape)
+        return fit_pars, None, None, None, None, None 
     else:
         fit_pars = {k: v for k, v in zip(MODEL_PARS[model], min_pars)}
 

@@ -179,6 +179,10 @@ def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16, fir
     Calculate all of the radial displacements in the XY plane for a set of
     trajectories, returning the raw displacements as an ndarray.
 
+    important note
+    --------------
+        This function is only designed to deal with gapless trajectories.
+
     args
     ----
         tracks          :   pandas.DataFrame, trajectories

@@ -18,10 +18,11 @@ from strobemodels import core
 # Helper
 from strobemodels.utils import FIXTURE_DIR
 
-class TestFitModelCDF(unittest.TestCase):
+class TestFitModels(unittest.TestCase):
     """
-    A variety of tests for the core least-squares CDF fitting function,
-    strobemodels.core.fit_model_cdf.
+    A variety of tests for the core least-squares CDF fitting functions:
+        - strobemodels.core.fit_model_cdf
+        - strobemodels.core.fit_ml
 
     """
     def setUp(self):
@@ -153,14 +154,14 @@ class TestFitModelCDF(unittest.TestCase):
             assert np.isnan(fit_pars[k])
 
         # Testing plotting
-        print("\ttesting plotting capabilities...")
+        print("\tchecking plotting option...")
         fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_model_cdf(
             self.tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
             pixel_size_um=1.0, bounds=None, guess=None, plot=True, show_plot=False, 
             save_png=None, weight_timesteps=False, weight_short_disps=False,
             max_jump=5.0)
 
-        print("\ttesting plotting with saving...")
+        print("\tchecking ability to save plots...")
         fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_model_cdf(
             self.tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
             pixel_size_um=1.0, bounds=None, guess=None, plot=True, show_plot=False, 
@@ -168,5 +169,133 @@ class TestFitModelCDF(unittest.TestCase):
             max_jump=5.0)
         os.remove("_test_out_pmf.png")
         os.remove("_test_out_cdf.png")
+
+    def test_fit_ml(self):
+        print("\ntesting strobemodels.core.fit_ml...")
+
+        # Test that it runs with simple settings
+        print("\tdoes it even run?")
+        fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            self.tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=None, guess=None, plot=False, show_plot=False,
+            save_png=None)
+        assert isinstance(fit_pars, dict)
+        assert bin_edges.shape == (5001,)
+        assert cdfs.shape == (4, 5000)
+        assert pmfs.shape == (4, 5000)
+        assert model_cdfs.shape == (4, 5000)
+        assert model_pmfs.shape == (4, 5000)
+
+        # Check for numerical correctness
+        print("\tchecking numerical correctness...")
+        assert abs(fit_pars["D"] - 1.9957911194268367) <= 1.0e-6
+        assert abs(fit_pars["loc_error"] - 0.03925184705124344) <= 1.0e-6
+
+        # Run with a more complicated model that accepts extra keyword arguments
+        # passed to the model function
+        print("\trunning on a more complicated model that accepts keyword arguments...")
+        fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            self.tracks, model="two_state_brownian_zcorr", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=None, guess=None, plot=False, show_plot=False,
+            save_png=None, dz=0.7)
+
+        # Issue the initial guess
+        print("\tchecking ability to issue initial guesses...")
+        guesses = [
+            np.array([0.25, 0.0025, 5.0, 0.035]),
+            np.array([0.50, 0.0025, 5.0, 0.035]),
+            np.array([0.75, 0.0025, 5.0, 0.035]),
+            np.array([1.00, 0.0025, 5.0, 0.035]),
+        ]
+
+        # Try with multiple initial guesses
+        fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            self.tracks, model="two_state_brownian_zcorr", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=None, guess=guesses, plot=False, show_plot=False,
+            save_png=None, dz=0.7)
+
+        # Try with a single initial guess
+        fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            self.tracks, model="two_state_brownian_zcorr", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=None, guess=guesses[0], plot=False, show_plot=False,
+            save_png=None, dz=0.7)
+
+        # Check the ability to constrain the estimate with parameter bounds
+        print("\tchecking ability to constrain parameters...")
+        bounds = (np.array([0.0, 0.0]), np.array([np.inf, 0.0]))
+        fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            self.tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=bounds, guess=None, plot=False, show_plot=False,
+            save_png=None, dz=0.7)
+        assert abs(fit_pars['loc_error']) <= 1.0e-10
+
+        # Constrain the diffusion coefficient (may throw some warnings here)
+        bounds = (np.array([1.5, 0.0]), np.array([1.75, 0.1]))
+        fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            self.tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=bounds, guess=None, plot=False, show_plot=False,
+            save_png=None, dz=0.7)
+        assert (fit_pars["D"] >= 1.5) and (fit_pars["D"] <= 1.75)
+        assert (fit_pars["loc_error"] >= 0.0) and (fit_pars["loc_error"] <= 0.1)
+
+        # Give it a guess that lies outside of the parameter bounds. The function
+        # should discard this guess and default to the middle of the bound interval
+        # for each parameter.
+        print("\tstability test: issuing a guess that lies outside the parameter bounds...")
+        bounds = (np.array([1.0, 0.0]), np.array([3.0, 0.1]))
+        guess = np.array([5.0, 0.0])
+        fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            self.tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=bounds, guess=guess, plot=False, show_plot=False,
+            save_png=None) 
+        assert abs(fit_pars["D"] - 1.9957903290177341) <= 1.0e-6
+        assert abs(fit_pars["loc_error"] - 0.03925210137100024) <= 1.0e-6
+
+        # See how it deals with pathological input: empty dataframe
+        print("\tstability test: issuing empty input...")
+        fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            self.tracks[:0], model="two_state_brownian_zcorr", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=None, guess=None, plot=False, show_plot=False,
+            save_png=None) 
+        for k in fit_pars.keys():
+            assert np.isnan(fit_pars[k])
+
+        # For the maximum likelihood method, it should not matter if the data completely
+        # lacks displacements in a given frame interval. Here, exclude all displacements
+        # beyond the first frame interval.
+        print("\tstability test: giving input with all data after the first " \
+            "frame interval erased...")
+        T = self.tracks[self.tracks["frame"] <= 1]
+
+        # Run once, calculating jumps up to 4 frames
+        fit_pars_4_frames, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            T, model="two_state_brownian_zcorr", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=None, guess=None, plot=False, show_plot=False,
+            save_png=None) 
+
+        # Run again, only calculating the first jump
+        fit_pars_1_frame, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            T, model="two_state_brownian_zcorr", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=None, guess=None, plot=False, show_plot=False,
+            save_png=None)
+        for k in fit_pars_1_frame.keys():
+            assert abs(fit_pars_1_frame[k] - fit_pars_4_frames[k]) <= 1.0e-10
+
+        # Check that we can do plotting
+        print("\tchecking plotting option...")
+        fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            self.tracks, model="two_state_brownian_zcorr", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=None, guess=None, plot=True, show_plot=False,
+            save_png=None)
+
+        # Check that we can save plots
+        print("\tchecking the ability to save plots...")
+        fit_pars, bin_edges, cdfs, pmfs, model_cdfs, model_pmfs = core.fit_ml(
+            self.tracks, model="two_state_brownian_zcorr", n_frames=4, frame_interval=0.01,
+            pixel_size_um=1.0, bounds=None, guess=None, plot=True, show_plot=False,
+            save_png="_test_out.png")
+        for path in ["_test_out_pmf.png", "_test_out_cdf.png"]:
+            assert os.path.isfile(path)
+            os.remove(path)
 
 
