@@ -17,6 +17,10 @@ import pandas as pd
 # Plotting
 import matplotlib.pyplot as plt 
 
+# Control warnings
+import warnings 
+warnings.simplefilter("ignore")
+
 # Package utilities
 from .utils import (
     normalize_pmf,

@@ -281,7 +281,7 @@ class FractionalBrownianMotion(MultivariateNormalRandomVector):
                         on which this FBM is defined
 
     """
-    def __init__(self, track_len=10, hurst=0.5, D=1.0, dt=0.01, D_type=1):
+    def __init__(self, track_len=10, hurst=0.5, D=1.0, dt=0.01, D_type=3):
         self.track_len = track_len 
         self.N = track_len 
         self.hurst = hurst
@@ -306,13 +306,13 @@ class FractionalBrownianMotion(MultivariateNormalRandomVector):
                 - np.power(np.abs(T - S), 2 * hurst)
             )
         elif D_type == 3:
-            D_mod = D / (H * np.power(dt, 2 * H - 1))
+            self.D_mod = D / (2 * hurst * np.power(dt, 2 * hurst - 1))
             T, S = (np.indices((track_len, track_len)) + 1) * dt
-            self.C = D_mod * (
+            self.C = self.D_mod * (
                 np.power(T, 2 * hurst)
                 + np.power(S, 2 * hurst)
                 - np.power(np.abs(T - S), 2 * hurst)
-            )           
+            )
 
         # Set zero mean
         self.mean = np.zeros(track_len, dtype="float64")

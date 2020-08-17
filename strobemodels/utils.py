@@ -124,6 +124,12 @@ def concat_tracks(*tracks):
     """
     n = len(tracks)
 
+    # Sort the tracks dataframes by their size. The only important thing
+    # here is that if at least one of the tracks dataframes is nonempty,
+    # we need to put that one first.
+    df_lens = [len(t) for t in tracks]
+    tracks = [t for _, t in sorted(zip(df_lens, tracks))][::-1]
+
     # Iteratively concatenate each dataframe to the first while 
     # incrementing the trajectory index as necessary
     out = tracks[0].assign(dataframe_index=0)

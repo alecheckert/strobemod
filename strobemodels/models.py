@@ -78,6 +78,152 @@ def pdf_1state_brownian(rt_tuples, D, loc_error, **kwargs):
     var2 = 2 * (D * rt_tuples[:,1] + (loc_error**2))
     return (rt_tuples[:,0] / var2) * np.exp(-(rt_tuples[:,0]**2) / (2*var2))
 
+def cdf_1state_fbm(rt_tuples, hurst, D, loc_error, frame_interval=0.01, **kwargs):
+    """
+    Distribution function for the 2D radial displacements of a single-
+    state fractional Brownian motion.
+
+    note
+    ----
+    Assumes the diffusion coefficient is "D_type 3", in the language of
+    strobemodels.simulate.fbm. This means that the coefficient *D* will 
+    depend on the value of *frame_interval*. While it is possible to 
+    define a dispersion parameter independent of *frame_interval*, the
+    advantage here is that *D* can be compared between FBMs that have
+    different Hurst parameters.
+
+    args
+    ----
+        rt_tuples       :   2D ndarray, shape (n_points, 2), the independent
+                            tuples (r, dt) at which to evaluate the CDF
+        hurst           :   float between 0.0 and 1.0, the Hurst parameter
+        D               :   float, the diffusion coefficient  (um^2 s^(-2*hurst))
+        loc_error       :   float, 1D localization error in um
+        frame_interval  :   float, the frame interval in seconds.
+
+    returns
+    -------
+        1D ndarray of shape (n_points,), the CDF 
+
+    """
+    D_mod = D / (hurst * np.power(frame_interval, 2 * hurst - 1))
+    return 1.0 - np.exp(-(rt_tuples[:,0]**2) / (
+        2 * D_mod * np.power(rt_tuples[:,1], 2*hurst) \
+        + 4 * (loc_error**2)
+    ))
+
+def pdf_1state_fbm(rt_tuples, hurst, D, loc_error, frame_interval=0.01, **kwargs):
+    """
+    Probability density function for the 2D radial displacements of a single-state
+    fractional Brownian motion.
+
+    note
+    ----
+    Assumes the diffusion coefficient is "D_type 3", in the language of
+    strobemodels.simulate.fbm. This means that the coefficient *D* will 
+    depend on the value of *frame_interval*. While it is possible to 
+    define a dispersion parameter independent of *frame_interval*, the
+    advantage here is that *D* can be compared between FBMs that have
+    different Hurst parameters.
+
+    args
+    ----
+        rt_tuples       :   2D ndarray, shape (n_points, 2), the independent
+                            tuples (r, dt) at which to evaluate the PDF
+        hurst           :   float between 0.0 and 1.0, the Hurst parameter
+        D               :   float, the diffusion coefficient (um^2 s^(-2*hurst))
+        loc_error       :   float, 1D localization error in um
+        frame_interval  :   float, the frame interval in seconds.
+
+    returns
+    -------
+        1D ndarray of shape (n_points,), the PDF
+
+    """
+    D_mod = D / (hurst * np.power(frame_interval, 2 * hurst - 1))
+    var2 = D_mod * np.power(rt_tuples[:,1], 2*hurst) + 2 * (loc_error**2)
+    return (rt_tuples[:,0] / var2) * np.exp(-(rt_tuples[:,0]**2) / (2*var2))
+
+def cdf_2state_fbm_uncorr(rt_tuples, hurst, f0, D0, D1, loc_error, frame_interval=0.01,
+    **kwargs):
+    """
+    Distribution function for the 2D radial displacements of a two-state
+    fractional Brownian motion. Both states are assumed to have the same 
+    Hurst parameter.
+
+    See the Note in *cdf_1state_fbm* and *pdf_1state_fbm*, which also 
+    applies here.
+
+    args
+    ----
+        rt_tuples       :   2D ndarray, shape (n_points, 2), the independent
+                            tuples (r, dt) at which to evaluate the CDF
+        hurst           :   float between 0.0 and 1.0, the Hurst parameter
+        f0              :   float, fraction of molecules in state 0
+        D0              :   float, diffusion coefficient for state 0 (um^2 s^(-2*hurst))
+        D1              :   float, diffusion coefficient for state 1 (um^2 s^(-2*hurst))
+        loc_error       :   float, 1D localization error in um
+        frame_interval  :   float, frame interval in seconds
+
+    returns
+    -------
+        1D ndarray of shape (n_points,), the CDF
+
+    """
+    D0_mod = D0 / (hurst * np.power(frame_interval, 2 * hurst - 1))
+    D1_mod = D1 / (hurst * np.power(frame_interval, 2 * hurst - 1))
+
+    r2 = rt_tuples[:,0]**2
+    t_h2 = np.power(rt_tuples[:,1], 2*hurst)
+
+    var2_0 = D0_mod * t_h2 + 2 * (loc_error**2)
+    var2_1 = D1_mod * t_h2 + 2 * (loc_error**2)
+
+    cdf_0 = 1.0 - np.exp(-r2 / (2 * var2_0))
+    cdf_1 = 1.0 - np.exp(-r2 / (2 * var2_1))
+
+    return f0 * cdf_0 + (1 - f0) * cdf_1 
+
+def pdf_2state_fbm_uncorr(rt_tuples, hurst, f0, D0, D1, loc_error, frame_interval=0.01,
+    **kwargs):
+    """
+    Probability density function for the 2D radial displacements of a two-state
+    fractional Brownian motion. Both states are assumed to have the same 
+    Hurst parameter.
+
+    See the Note in *cdf_1state_fbm* and *pdf_1state_fbm*, which also 
+    applies here.
+
+    args
+    ----
+        rt_tuples       :   2D ndarray, shape (n_points, 2), the independent
+                            tuples (r, dt) at which to evaluate the PDF 
+        hurst           :   float between 0.0 and 1.0, the Hurst parameter
+        f0              :   float, fraction of molecules in state 0
+        D0              :   float, diffusion coefficient for state 0 (um^2 s^(-2*hurst))
+        D1              :   float, diffusion coefficient for state 1 (um^2 s^(-2*hurst))
+        loc_error       :   float, 1D localization error in um
+        frame_interval  :   float, frame interval in seconds
+
+    returns
+    -------
+        1D ndarray of shape (n_points,), the PDF
+
+    """
+    D0_mod = D0 / (hurst * np.power(frame_interval, 2 * hurst - 1))
+    D1_mod = D1 / (hurst * np.power(frame_interval, 2 * hurst - 1))
+
+    r2 = rt_tuples[:,0]**2
+    t_h2 = np.power(rt_tuples[:,1], 2*hurst)
+
+    var2_0 = D0_mod * t_h2 + 2 * (loc_error**2)
+    var2_1 = D1_mod * t_h2 + 2 * (loc_error**2)
+
+    pdf_0 = (rt_tuples[:,0] / var2_0) * np.exp(-r2 / (2 * var2_0))
+    pdf_1 = (rt_tuples[:,0] / var2_1) * np.exp(-r2 / (2 * var2_1))
+
+    return f0 * pdf_0 + (1 - f0) * pdf_1 
+
 def cdf_2state_brownian_uncorr(rt_tuples, f0, D0, D1, loc_error, **kwargs):
     """
     Distribution function for the 2D radial displacements of a two-state
@@ -497,8 +643,10 @@ def pdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
 # Cumulative distribution functions
 CDF_MODELS = {
     "one_state_brownian": cdf_1state_brownian,
+    "one_state_fbm": cdf_1state_fbm,
     "two_state_brownian": cdf_2state_brownian_uncorr,
     "two_state_brownian_zcorr": cdf_2state_brownian_zcorr,
+    "two_state_fbm": cdf_2state_fbm_uncorr,
     "three_state_brownian": cdf_3state_brownian_uncorr,
     "three_state_brownian_zcorr": cdf_3state_brownian_zcorr,
 }
@@ -506,8 +654,10 @@ CDF_MODELS = {
 # Probability density functions
 PDF_MODELS = {
     "one_state_brownian": pdf_1state_brownian,
+    "one_state_fbm": pdf_1state_fbm,
     "two_state_brownian": pdf_2state_brownian_uncorr,
     "two_state_brownian_zcorr": pdf_2state_brownian_zcorr,
+    "two_state_fbm": pdf_2state_fbm_uncorr,
     "three_state_brownian": pdf_3state_brownian_uncorr,
     "three_state_brownian_zcorr": pdf_3state_brownian_zcorr,   
 }
@@ -515,8 +665,10 @@ PDF_MODELS = {
 # Identity of each fit parameter for each model 
 MODEL_PARS = {
     "one_state_brownian": ["D", "loc_error"],
+    "one_state_fbm": ["hurst", "D", "loc_error"],
     "two_state_brownian": ["f0", "D0", "D1", "loc_error"],
     "two_state_brownian_zcorr": ["f0", "D0", "D1", "loc_error"],
+    "two_state_fbm": ["hurst", "f0", "D0", "D1", "loc_error"],
     "three_state_brownian": ["f0", "f1", "D0", "D1", "D2", "loc_error"],
     "three_state_brownian_zcorr": ["f0", "f1", "D0", "D1", "D2", "loc_error"]
 }
@@ -530,6 +682,10 @@ MODEL_PAR_BOUNDS = {
         np.array([1.0e-8, 0.0]),
         np.array([np.inf, 0.1])
     ),
+    "one_state_fbm": (
+        np.array([1.0e-8, 1.0e-8, 0.0]),
+        np.array([1.0, np.inf, 0.1])
+    ),
     "two_state_brownian": (
         np.array([0.0, 1.0e-8, 0.5, 0.0]),
         np.array([1.0, 0.005, np.inf, 0.1])
@@ -537,6 +693,10 @@ MODEL_PAR_BOUNDS = {
     "two_state_brownian_zcorr": (
         np.array([0.0, 1.0e-8, 0.5, 0.0]),
         np.array([1.0, 0.005, np.inf, 0.1])
+    ),
+    "two_state_fbm": (
+        np.array([0.0, 0.0, 0.0, 0.1, 0.0]),
+        np.array([1.0, 1.0, 0.05, np.inf, 0.1])
     ),
     "three_state_brownian": (
         np.array([0.0, 0.0, 1.0e-8, 0.05, 1.0, 0.0]),
@@ -551,12 +711,13 @@ MODEL_PAR_BOUNDS = {
 # Naive parameter guesses to seed fits
 MODEL_GUESS = {
     "one_state_brownian": np.array([1.0, 0.035]),
+    "one_state_fbm": np.array([0.5, 1.0, 0.035]),
     "two_state_brownian": np.array([0.3, 0.01, 1.0, 0.035]),
     "two_state_brownian_zcorr": np.array([0.3, 0.001, 1.0, 0.035]),
+    "two_state_fbm": np.array([0.5, 0.3, 0.001, 1.0, 0.035]),
     "three_state_brownian": np.array([0.33, 0.33, 0.001, 0.5, 2.0, 0.035]),
     "three_state_brownian_zcorr": np.array([0.33, 0.33, 0.001, 0.5, 2.0, 0.035]),
 }
-
 
 
 
