@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-core.py -- core fitting routines and user-facing functions
+core.py -- core model fitting routines
 
 """
 import os

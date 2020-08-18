@@ -306,6 +306,40 @@ class TestBrownianDefocTools(unittest.TestCase):
         out = utils.defoc_prob_brownian(D, 0, dt, dz)
         assert out.shape[0] == 0
 
+    def test_defoc_prob_fbm(self):
+        print("\ntesting strobmodels.utils.defoc_prob_fbm...")
+
+        D = 3.5
+        dt = 0.01
+        hurst = 0.4
+        n_frames = 8
+        dz = 0.7
+
+        # Test that the function runs at all
+        print("\tdoes it even run?")
+        out = utils.defoc_prob_fbm(D, hurst, n_frames, dt, dz)
+        assert out.shape[0] == n_frames 
+
+        # Check for correctness (below, *sim_result* is the result from
+        # simulated data)
+        print("\tchecking for numerical correctness...")
+        sim_result = np.array([
+            0.6656603, 0.4592361, 0.3193609, 0.2224852, 0.1551785,
+            0.1082383, 0.0755337, 0.0527409
+        ])
+        testing.assert_allclose(out, sim_result, atol=1.0e-3)
+
+        # Make sure it can run with just one frame interval
+        print("\tstability test: running with just one frame interval...")
+        out2 = utils.defoc_prob_fbm(D, hurst, 1, dt, dz)
+        assert out2.shape[0] == 1
+        assert np.abs(out2[0] - out[0]) <= 1.0e-10
+
+        # Make sure it runs with zero frame intervals
+        print("\tstability test: running with zero frame intervals...")
+        out2 = utils.defoc_prob_fbm(D, hurst, 0, dt, dz)
+        assert out2.shape[0] == 0
+
 class TestNormalizationMethods(unittest.TestCase):
     """
     Test methods that normalize PDFs.
@@ -462,6 +496,54 @@ class TestCharacteristicFunctionUtilities(unittest.TestCase):
 
         testing.assert_allclose(pdf_real, pdf_gen, atol=1.0e-5)
 
+class TestSplineUtilities(unittest.TestCase):
+    """
+    Test spline utilities associated with interpolation of the fractional Brownian
+    motion defocalization function.
+
+    tests:
+        - strobemodels.utils.load_fbm_defoc_spline
+        - strobemodels.utils.eval_spline
+        - strobemodels.utils.load_spline_coefs  # Not yet implemented
+        - strobemodels.utils.load_spline_coefs_multiple_frame_interval
+        - strobemodels.utils.save_spline_coefs  # Not yet implemented 
+        - strobemodels.utils.save_spline_coefs_multiple_frame_interval  # Not yet implemented
+
+    """
+    def test_load_fbm_defoc_spline(self):
+        """
+        Note that this is also essentially a test for 
+        load_spline_coefs_multiple_frame_interval.
+
+        """
+        print("\ntesting strobemodels.utils.load_fbm_defoc_spline...")
+
+        # Mostly this is a "does it run?"-type test
+        tcks = utils.load_fbm_defoc_spline(dz=0.7)
+
+        # Output is the expected shape
+        assert len(tcks) == 8
+        for j in range(8):
+            assert isinstance(tcks[j], tuple)
+            assert len(tcks[j]) == 5
+
+            # Orders of the cubic spline in x and y
+            assert tcks[j][3] == 3
+            assert tcks[j][4] == 3
+
+        # Output is numerically correct for a few test values
+        print("tcks[0][2] = ", tcks[0][2])
+
+    def test_eval_spline(self):
+        print("\ntesting strobemodels.utils.eval_spline...")
+
+        tcks = utils.load_fbm_defoc_spline(dz=0.7)
+        test_c = np.array([0.001, 0.003, 0.01, 0.03, 0.1, 0.3])
+        expected = np.array([0.1934370862308236, 0.1932513816495122, 0.1926027052582681,
+            0.19076036328736865, 0.18443935968392583, 0.1674346387463391])
+        for i, c in enumerate(test_c):
+            assert abs(expected[i] - utils.eval_spline(0.4, c, tcks[0])) <= 1.0e-8
+
 class TestMiscUtilities(unittest.TestCase):
     """
     Unit tests for other, miscellaneous utilities in the strobemodels.utils module.
@@ -524,13 +606,13 @@ class TestMiscUtilities(unittest.TestCase):
             assert t in tracks["trajectory"].unique().tolist()
         assert len(tracks) == len(tracks_0) + len(tracks_1)
         testing.assert_allclose(
-            np.asarray(tracks.loc[tracks["dataframe_index"] == 0, ["frame", "trajectory", "x", "y"]]),
-            np.asarray(tracks_0[["frame", "trajectory", "x", "y"]]),
+            np.asarray(tracks.loc[tracks["dataframe_index"] == 1, ["frame", "x", "y"]]),
+            np.asarray(tracks_0[["frame", "x", "y"]]),
             rtol=1.0e-10
         )
         testing.assert_allclose(
             np.asarray(tracks.loc[tracks["dataframe_index"] == 0, ["frame", "x", "y"]]),
-            np.asarray(tracks_0[["frame", "x", "y"]]),
+            np.asarray(tracks_1[["frame", "x", "y"]]),
             rtol=1.0e-10
         )
 

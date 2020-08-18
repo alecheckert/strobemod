@@ -35,6 +35,8 @@ Then install `strobemodels` with
 
 From the `strobemodels` repo, run `nose2`. (Or `pytest`, or another rest runner if you prefer.)
 
+`strobemodels` must be installed in the current `conda` environment to run tests.
+
 ### Getting started
 
 (coming soon)
