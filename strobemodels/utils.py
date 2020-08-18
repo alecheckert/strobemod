@@ -461,6 +461,10 @@ def defoc_prob_fbm(D, hurst, n_frames, frame_interval, dz):
     # Evaluate the probability of defocalization at each frame interval 
     return np.asarray([eval_spline(hurst, c, tck) for tck in tcks[:n_frames]])
 
+#################################
+## SPLINE EVALUATION UTILITIES ##
+#################################
+
 @lru_cache(maxsize=1)
 def load_fbm_defoc_spline(dz=0.7):
     """
@@ -485,7 +489,7 @@ def load_fbm_defoc_spline(dz=0.7):
     sel_dz = avail_dz[m]
 
     # Path to this file
-    path = os.path.join(DATA_DIR, "fbm_spline_coefs_dz-%.1f.txt" % sel_dz)
+    path = os.path.join(DATA_DIR, "fbm_defoc_splines_dz-%.1f.txt" % sel_dz)
 
     # Load the spline coefficients
     tcks = load_spline_coefs_multiple_frame_interval(path)
@@ -590,6 +594,31 @@ def save_spline_coefs(path, tck):
     with open(coefs_path, "w") as o:
         o.write("\n".join([str_concat(tck[i]) for i in range(3)]))
         o.write("\n%d\n%d" % (tck[3], tck[4]))
+
+def save_spline_coefs_multiple_frame_interval(path, interpolators):
+    """
+    Similar to save_spline_coefs(), but save spline coefficients
+    originating from multiple frame intervals.
+
+    The result can be read by load_spline_coefs_multiple_frame_intervals().
+
+    args
+    ----
+        path            :   str, out path
+        interpolators   :   list of scipy.interpolate.interpolate.interp2d,
+                            spline interpolators.
+
+    """
+    def str_concat(arraylike):
+        return ",".join([str(j) for j in arraylike])   
+
+    def tck_rep(tck):
+        S = "\n".join([str_concat(tck[i]) for i in range(3)])
+        S = "%s\n%d\n%d\n" % (S, tck[3], tck[4])
+        return S 
+
+    with open(path, "w") as o:
+        o.write(";".join([tck_rep(interpolator.tck) for interpolator in interpolators]))
 
 ###################
 ## NORMALIZATION ##
