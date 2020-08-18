@@ -272,7 +272,7 @@ class FractionalBrownianMotion(MultivariateNormalRandomVector):
         dt          :   float, the time interval for
                         each step
         D_type      :   int, the type of diffusion
-                        coefficient (either 1 or 2).
+                        coefficient (either 1, 2, or 3).
 
     methods
     -------

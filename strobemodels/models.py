@@ -182,7 +182,7 @@ def cdf_2state_fbm_uncorr(rt_tuples, hurst, f0, D0, D1, loc_error, frame_interva
     cdf_0 = 1.0 - np.exp(-r2 / (2 * var2_0))
     cdf_1 = 1.0 - np.exp(-r2 / (2 * var2_1))
 
-    return f0 * cdf_0 + (1 - f0) * cdf_1 
+    return f0 * cdf_0 + (1 - f0) * cdf_1
 
 def pdf_2state_fbm_uncorr(rt_tuples, hurst, f0, D0, D1, loc_error, frame_interval=0.01,
     **kwargs):
@@ -222,7 +222,146 @@ def pdf_2state_fbm_uncorr(rt_tuples, hurst, f0, D0, D1, loc_error, frame_interva
     pdf_0 = (rt_tuples[:,0] / var2_0) * np.exp(-r2 / (2 * var2_0))
     pdf_1 = (rt_tuples[:,0] / var2_1) * np.exp(-r2 / (2 * var2_1))
 
-    return f0 * pdf_0 + (1 - f0) * pdf_1 
+    return f0 * pdf_0 + (1 - f0) * pdf_1
+
+def cdf_2state_fbm_zcorr(rt_tuples, hurst, f0, D0, D1, loc_error, frame_interval=0.01,
+    dz=0.7, **kwargs):
+    """
+    Distribution function for the 2D radial displacements of a two-state
+    fractional Brownian motion. Both states are assumed to have the same 
+    Hurst parameter. The molecules are assumed to start with uniform probability
+    in a focal volume of depth *dz*, and are lost at the first frame interval
+    that they lie outside of the focal volume.
+
+    See the Note in *cdf_1state_fbm* and *pdf_1state_fbm*, which also 
+    applies here.
+
+    args
+    ----
+        rt_tuples       :   2D ndarray, shape (n_points, 2), the independent
+                            tuples (r, dt) at which to evaluate the CDF
+        hurst           :   float between 0.0 and 1.0, the Hurst parameter
+        f0              :   float, fraction of molecules in state 0
+        D0              :   float, diffusion coefficient for state 0 (um^2 s^(-2*hurst))
+        D1              :   float, diffusion coefficient for state 1 (um^2 s^(-2*hurst))
+        loc_error       :   float, 1D localization error in um
+        frame_interval  :   float, frame interval in seconds
+        dz              :   float, depth of the focal volume in um
+
+    returns
+    -------
+        1D ndarray of shape (n_points,), the CDF
+
+    """
+    D0_mod = D0 / (hurst * np.power(frame_interval, 2 * hurst - 1))
+    D1_mod = D1 / (hurst * np.power(frame_interval, 2 * hurst - 1))
+
+    r2 = rt_tuples[:,0]**2
+    t_h2 = np.power(rt_tuples[:,1], 2*hurst)
+
+    var2_0 = D0_mod * t_h2 + 2 * (loc_error**2)
+    var2_1 = D1_mod * t_h2 + 2 * (loc_error**2)
+
+    cdf_0 = 1.0 - np.exp(-r2 / (2 * var2_0))
+    cdf_1 = 1.0 - np.exp(-r2 / (2 * var2_1))
+    result = np.zeros(cdf_0.shape, dtype=np.float64)
+
+    # Get the total number of frames in the movie
+    frames = (rt_tuples[:,1] / frame_interval).round(0).astype(np.int64)
+    n_frames = frames.max()
+    unique_frames = np.arange(1, n_frames+1)
+
+    # Get the fraction of defocalized particles for each state
+    frac_remain_state_0 = defoc_prob_fbm(D0, hurst, n_frames, frame_interval, dz)
+    frac_remain_state_1 = defoc_prob_fbm(D1, hurst, n_frames, frame_interval, dz)
+
+    # For each frame, adjust the state occupations to account for defocalization
+    for frame in unique_frames:
+
+        # The set of observations corresponding to this frame interval
+        in_frame = frames == frame 
+
+        # The adjusted state fractions
+        f0_adj = f0 * frac_remain_state_0[frame-1]
+        f1_adj = (1-f0) * frac_remain_state_1[frame-1]
+        norm = f0_adj + f1_adj 
+        f0_adj = f0_adj / norm 
+        f1_adj = f1_adj / norm 
+
+        # Make the mixed CDF
+        result[in_frame] = f0_adj * cdf_0[in_frame] + f1_adj * cdf_1[in_frame]
+
+    return result
+
+def pdf_2state_fbm_zcorr(rt_tuples, hurst, f0, D0, D1, loc_error, frame_interval=0.01,
+    dz=0.7, **kwargs):
+    """
+    Distribution function for the 2D radial displacements of a two-state
+    fractional Brownian motion. Both states are assumed to have the same 
+    Hurst parameter. The molecules are assumed to start with uniform probability
+    in a focal volume of depth *dz*, and are "lost" at the first frame interval
+    that they lie outside of the focal volume.
+
+    See the Note in *cdf_1state_fbm* and *pdf_1state_fbm*, which also 
+    applies here.
+
+    args
+    ----
+        rt_tuples       :   2D ndarray, shape (n_points, 2), the independent
+                            tuples (r, dt) at which to evaluate the PDF
+        hurst           :   float between 0.0 and 1.0, the Hurst parameter
+        f0              :   float, fraction of molecules in state 0
+        D0              :   float, diffusion coefficient for state 0 (um^2 s^(-2*hurst))
+        D1              :   float, diffusion coefficient for state 1 (um^2 s^(-2*hurst))
+        loc_error       :   float, 1D localization error in um
+        frame_interval  :   float, frame interval in seconds
+        dz              :   float, depth of the focal volume in um
+
+    returns
+    -------
+        1D ndarray of shape (n_points,), the PDF
+
+    """   
+    D0_mod = D0 / (hurst * np.power(frame_interval, 2 * hurst - 1))
+    D1_mod = D1 / (hurst * np.power(frame_interval, 2 * hurst - 1))
+
+    r2 = rt_tuples[:,0]**2
+    t_h2 = np.power(rt_tuples[:,1], 2*hurst)
+
+    var2_0 = D0_mod * t_h2 + 2 * (loc_error**2)
+    var2_1 = D1_mod * t_h2 + 2 * (loc_error**2)
+    
+    pdf_0 = (rt_tuples[:,0] / var2_0) * np.exp(-r2 / (2 * var2_0))
+    pdf_1 = (rt_tuples[:,0] / var2_1) * np.exp(-r2 / (2 * var2_1))
+
+    result = np.zeros(pdf_0.shape, dtype=np.float64)
+
+    # Get the total number of frames in the movie
+    frames = (rt_tuples[:,1] / frame_interval).round(0).astype(np.int64)
+    n_frames = frames.max()
+    unique_frames = np.arange(1, n_frames+1)
+
+    # Get the fraction of defocalized particles for each state
+    frac_remain_state_0 = defoc_prob_fbm(D0, hurst, n_frames, frame_interval, dz)
+    frac_remain_state_1 = defoc_prob_fbm(D1, hurst, n_frames, frame_interval, dz)
+
+    # For each frame, adjust the state occupations to account for defocalization
+    for frame in unique_frames:
+
+        # The set of observations corresponding to this frame interval
+        in_frame = frames == frame 
+
+        # The adjusted state fractions
+        f0_adj = f0 * frac_remain_state_0[frame-1]
+        f1_adj = (1-f0) * frac_remain_state_1[frame-1]
+        norm = f0_adj + f1_adj 
+        f0_adj = f0_adj / norm 
+        f1_adj = f1_adj / norm 
+
+        # Make the mixed CDF
+        result[in_frame] = f0_adj * pdf_0[in_frame] + f1_adj * pdf_1[in_frame]
+
+    return result   
 
 def cdf_2state_brownian_uncorr(rt_tuples, f0, D0, D1, loc_error, **kwargs):
     """
@@ -647,6 +786,7 @@ CDF_MODELS = {
     "two_state_brownian": cdf_2state_brownian_uncorr,
     "two_state_brownian_zcorr": cdf_2state_brownian_zcorr,
     "two_state_fbm": cdf_2state_fbm_uncorr,
+    "two_state_fbm_zcorr": cdf_2state_fbm_zcorr,
     "three_state_brownian": cdf_3state_brownian_uncorr,
     "three_state_brownian_zcorr": cdf_3state_brownian_zcorr,
 }
@@ -658,6 +798,7 @@ PDF_MODELS = {
     "two_state_brownian": pdf_2state_brownian_uncorr,
     "two_state_brownian_zcorr": pdf_2state_brownian_zcorr,
     "two_state_fbm": pdf_2state_fbm_uncorr,
+    "two_state_fbm_zcorr": pdf_2state_fbm_zcorr,
     "three_state_brownian": pdf_3state_brownian_uncorr,
     "three_state_brownian_zcorr": pdf_3state_brownian_zcorr,   
 }
@@ -669,6 +810,7 @@ MODEL_PARS = {
     "two_state_brownian": ["f0", "D0", "D1", "loc_error"],
     "two_state_brownian_zcorr": ["f0", "D0", "D1", "loc_error"],
     "two_state_fbm": ["hurst", "f0", "D0", "D1", "loc_error"],
+    "two_state_fbm_zcorr": ["hurst", "f0", "D0", "D1", "loc_error"],
     "three_state_brownian": ["f0", "f1", "D0", "D1", "D2", "loc_error"],
     "three_state_brownian_zcorr": ["f0", "f1", "D0", "D1", "D2", "loc_error"]
 }
@@ -698,6 +840,10 @@ MODEL_PAR_BOUNDS = {
         np.array([0.0, 0.0, 0.0, 0.1, 0.0]),
         np.array([1.0, 1.0, 0.05, np.inf, 0.1])
     ),
+    "two_state_fbm_zcorr": (
+        np.array([0.0, 0.0, 0.0, 0.1, 0.0]),
+        np.array([1.0, 1.0, 0.05, np.inf, 0.1])
+    ),
     "three_state_brownian": (
         np.array([0.0, 0.0, 1.0e-8, 0.05, 1.0, 0.0]),
         np.array([1.0, 1.0, 0.02, 1.0, np.inf, 0.1])
@@ -715,6 +861,7 @@ MODEL_GUESS = {
     "two_state_brownian": np.array([0.3, 0.01, 1.0, 0.035]),
     "two_state_brownian_zcorr": np.array([0.3, 0.001, 1.0, 0.035]),
     "two_state_fbm": np.array([0.5, 0.3, 0.001, 1.0, 0.035]),
+    "two_state_fbm_zcorr": np.array([0.5, 0.3, 0.001, 1.0, 0.035]),
     "three_state_brownian": np.array([0.33, 0.33, 0.001, 0.5, 2.0, 0.035]),
     "three_state_brownian_zcorr": np.array([0.33, 0.33, 0.001, 0.5, 2.0, 0.035]),
 }
