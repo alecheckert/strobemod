@@ -6,6 +6,8 @@ utils.py
 import os
 import numpy as np
 import pandas as pd 
+from functools import lru_cache 
+from scipy import interpolate 
 
 # 3D Hankel transform
 from hankel import SymmetricFourierTransform 
@@ -422,6 +424,134 @@ def defoc_prob_brownian(D, n_frames, frame_interval, dz):
         result[t] = pmf.sum()
 
     return result 
+
+def defoc_prob_fbm(D, hurst, n_frames, frame_interval, dz):
+    """
+    Return a vector representing the defocalization probability of a
+    fractional Brownian motion with a given Hurst parameter and 
+    diffusion coefficient at each frame up to *n_frames*.
+
+    args
+    ----
+        D           :   float, the diffusion coefficient of the FBM. This
+                        is assumed to the "normalized" diffusion coefficient
+                        with units of um^2 s^-1 (D_type = 3), the same that
+                        is internally used in the fitting routines
+        hurst       :   float between 0.0 and 1.0, Hurst parameter
+        n_frames    :   int, the number of frame intervals
+        frame_interval  :   float, the frame interval in seconds
+        dz          :   float, the depth of the focal plane in um
+
+    returns
+    -------
+        1D ndarray of dtype float64 and length *n_frames*, the fraction
+            of FBMs remaining in the slice at each of the frame intervals
+
+    """
+    # Get the spline interpolator corresponding to this focal depth 
+    interpolator = get_fbm_defoc_interpolator(dz)
+
+    # Get the dispersion parameter
+    c = D * frame_interval / (2 * hurst)
+
+    # Estimate the fraction of particles defocalized at each frame interval
+    raise NotImplementedError 
+
+@lru_cache(maxsize=1)
+def load_fbm_defoc_spline(dz=0.7):
+    """
+    Given a focal depth, get a spline interpolator that enables calculation
+    of the fraction of FBMs that defocalize at various frame intervals.
+
+    args
+    ----
+        dz      :   float, the focal depth in um
+
+    returns
+    -------
+        5-tuple, the *tck* argument expected by scipy.interpolate's spline
+            evaluators -- specifically scipy.interpolate.bisplev
+
+    """
+    # Available frame intervals
+    avail_dz = np.array([0.7])
+
+    # Get the closest available focal depth
+    m = np.argmin(np.abs(avail_dz - dz))
+    sel_dz = avail_dz[m]
+
+    # Path to this file
+    path = os.path.join(DATA_DIR, "fbm_spline_coefs_dz-%.1f.txt" % sel_dz)
+
+    # Load the spline coefficients
+    tck = load_spline_coefs(path)
+    return tck 
+
+def eval_spline(x, y, tck):
+    """
+    Evaluate a bivariate spline at each combination of a set of X and Y 
+    points.
+
+    args
+    ----
+        x       :   1D ndarray, the array of unique x points
+        y       :   1D ndarray, the array of unique y points
+        tck     :   5-tuple, bivariate spline coefficients of the type
+                    read by *load_spline_coefs*
+
+    returns
+    -------
+        2D ndarray of shape (y.shape[0], x.shape[0]), the evaluated
+            bivariate spline at each combination of the input points
+
+    """
+    return interpolate.bisplev(x, y, tck).T 
+
+def load_spline_coefs(path):
+    """
+    Load a set of spline coefficients from a file. These are in the 
+    format required by scipy.interpolate for evaluation of bivariate
+    splines.
+
+    args
+    ----
+        path        :   str, path to a file of the type written by 
+                        save_spline_coefs()
+
+    returns
+    -------
+        5-tuple, the *tck* argument expected by scipy.interpolate.bisplev
+
+    """
+    with open(coefs_path, "r") as f:
+        lines = f.readlines()
+    lines = [l.replace("\n", "") for l in lines]
+    x = np.asarray([float(j) for j in lines[0].split(",")])
+    y = np.asarray([float(j) for j in lines[1].split(",")])
+    coefs = np.asarray([float(j) for j in lines[2].split(",")])
+    kx = int(lines[3])
+    ky = int(lines[4])
+    return (x, y, coefs, kx, ky)
+
+def save_spline_coefs(path, tck):
+    """
+    Save a set of bivariate spline coefficients to a file that can be 
+    later read by load_spline_coefs.
+
+    args
+    ----
+        path        :   str, out path 
+        tck         :   5-tuple, the spline coefficients produced by 
+                        running scipy.interpolate.interp2d,
+                        scipy.interpolate.bisplrep, or similar
+
+    """
+    def str_concat(arraylike):
+        return ",".join([str(j) for j in arraylike])
+
+    with open(coefs_path, "w") as o:
+        o.write("\n".join([str_concat(tck[i]) for i in range(3)]))
+        o.write("\n%d\n%d" % (tck[3], tck[4]))
 
 ###################
 ## NORMALIZATION ##
