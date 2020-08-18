@@ -448,14 +448,18 @@ def defoc_prob_fbm(D, hurst, n_frames, frame_interval, dz):
             of FBMs remaining in the slice at each of the frame intervals
 
     """
-    # Get the spline interpolator corresponding to this focal depth 
-    interpolator = get_fbm_defoc_interpolator(dz)
+    if n_frames > 8:
+        raise RuntimeError("strobemodels.utils.defoc_prob_fbm: no more than " \
+            "8 frame intervals supported for FBM fitting")
 
     # Get the dispersion parameter
-    c = D * frame_interval / (2 * hurst)
+    c = np.log(D * frame_interval / (2 * hurst))
 
-    # Estimate the fraction of particles defocalized at each frame interval
-    raise NotImplementedError 
+    # Load the spline coefficients
+    tcks = load_fbm_defoc_spline(dz=dz)
+
+    # Evaluate the probability of defocalization at each frame interval 
+    return np.asarray([eval_spline(hurst, c, tck) for tck in tcks[:n_frames]])
 
 @lru_cache(maxsize=1)
 def load_fbm_defoc_spline(dz=0.7):
@@ -484,8 +488,8 @@ def load_fbm_defoc_spline(dz=0.7):
     path = os.path.join(DATA_DIR, "fbm_spline_coefs_dz-%.1f.txt" % sel_dz)
 
     # Load the spline coefficients
-    tck = load_spline_coefs(path)
-    return tck 
+    tcks = load_spline_coefs_multiple_frame_interval(path)
+    return tcks
 
 def eval_spline(x, y, tck):
     """
@@ -509,8 +513,8 @@ def eval_spline(x, y, tck):
 
 def load_spline_coefs(path):
     """
-    Load a set of spline coefficients from a file. These are in the 
-    format required by scipy.interpolate for evaluation of bivariate
+    Load a single set of bivariate spline coefficients from a file. These
+    are in the format required by scipy.interpolate for evaluation of bivariate
     splines.
 
     args
@@ -532,6 +536,40 @@ def load_spline_coefs(path):
     kx = int(lines[3])
     ky = int(lines[4])
     return (x, y, coefs, kx, ky)
+
+def load_spline_coefs_multiple_frame_interval(path):
+    """
+    Load multiple sets of bivariate spline coefficients from a file.
+    These are in the format required by scipy.interpolate for 
+    evaluation of bivariate splines.
+
+    The individual sets of spline coefficients are ;-delimited, while
+    the different parts of the coefficient 5-tuple are newline-delimited and
+    the individual numbers are ,-delimited.
+
+    args
+    ----
+        path        :   str, path to a file of the type written by
+                        save_spline_coefs_multiple()
+
+    returns
+    -------
+        list of 5-tuple, the bivariate spline coefficients for each
+            frame interval
+
+    """
+    with open(path, "r") as f:
+        S = f.read().split(";")
+    S = [j.split("\n") for j in S]
+    result = []
+    for lines in S:
+        x = np.asarray([float(j) for j in lines[0].split(",")])
+        y = np.asarray([float(j) for j in lines[1].split(",")])
+        coefs = np.array([float(j) for j in lines[2].split(",")])
+        kx = int(lines[3])
+        ky = int(lines[4])
+        result.append((x, y, coefs, kx, ky))
+    return result 
 
 def save_spline_coefs(path, tck):
     """
