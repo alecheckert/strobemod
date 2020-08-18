@@ -239,7 +239,7 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
 
 def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
     pixel_size_um=0.16, bounds=None, guess=None, plot=False, show_plot=True,
-    save_png=None, **model_kwargs):
+    save_png=None, fall_back_to_model_cdf=True, **model_kwargs):
     """
     Given a diffusion model, estimate the model parameters that maximize the likelihood
     of the observed trajectories. Return the final fit parameters along with the 
@@ -264,6 +264,9 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
                                 of this function without actually opening the plot.
         save_png            :   str, path to save the plot to. If *None*, the plot is 
                                 not saved.
+        fall_back_to_model_cdf  :   bool. If fitting fails, fall back to *fit_model_cdf* as 
+                                an alternative. The ML estimator can be more accurate, but
+                                is also less stable.
         model_kwargs        :   special arguments accepted by model function
 
     returns
@@ -341,8 +344,14 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
     # Catch failed fits
     if min_pars is None:
         print("Optimal fit parameters not found")
-        fit_pars = {k: np.nan for k in MODEL_PARS[model]}
-        return fit_pars, None, None, None, None, None 
+        if fall_back_to_model_cdf:
+            print("Falling back to model CDF fitting method...")
+            return fit_model_cdf(tracks, model=model, n_frames=n_frames, frame_interval=frame_interval,
+                pixel_size_um=pixel_size_um, bounds=bounds, guess=guess, plot=plot, show_plot=show_plot,
+                save_png=save_png, **model_kwargs)
+        else:
+            fit_pars = {k: np.nan for k in MODEL_PARS[model]}
+            return fit_pars, None, None, None, None, None 
     else:
         fit_pars = {k: v for k, v in zip(MODEL_PARS[model], min_pars)}
 

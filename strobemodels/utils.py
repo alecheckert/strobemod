@@ -455,6 +455,12 @@ def defoc_prob_fbm(D, hurst, n_frames, frame_interval, dz):
     # Get the dispersion parameter
     c = np.log(D * frame_interval / (2 * hurst))
 
+    # If the dispersion lies outside the interpolated range
+    # if c < -23.0:
+    #     return np.ones(n_frames, dtype=np.float64)
+    # if c > 6.9:
+    #     return np.zeros(n_frames, dtype=np.float64)
+
     # Load the spline coefficients
     tcks = load_fbm_defoc_spline(dz=dz)
 

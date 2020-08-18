@@ -35,7 +35,7 @@ corresponds to the PDF/CDF for the delay *t* and the jump length *r*.
 import numpy as np 
 
 # Custom utilities
-from .utils import defoc_prob_brownian
+from .utils import defoc_prob_brownian, defoc_prob_fbm 
 
 def cdf_1state_brownian(rt_tuples, D, loc_error, **kwargs):
     """
