@@ -532,7 +532,9 @@ class TestSplineUtilities(unittest.TestCase):
             assert tcks[j][4] == 3
 
         # Output is numerically correct for a few test values
-        print("tcks[0][2] = ", tcks[0][2])
+        assert abs(tcks[0][2][100] - 0.010231155665098638) <= 1.0e-10
+        assert abs(tcks[0][2][300] - 0.39828100158110774) <= 1.0e-10
+        assert abs(tcks[0][2][500] - 0.9827226762660545) <= 1.0e-10
 
     def test_eval_spline(self):
         print("\ntesting strobemodels.utils.eval_spline...")

@@ -73,11 +73,8 @@ class TestAllModels(unittest.TestCase):
             cdf = CDF_MODELS[model](rt_tuples, *MODEL_PARAMETERS[model])
             pdf = PDF_MODELS[model](rt_tuples, *MODEL_PARAMETERS[model])
 
-            # Load the correct result
+            # Fixture file with the the correct result
             data_file = os.path.join(FIXTURE_DIR, "test_numeric_output_{}.csv".format(model))
-            expected = pd.read_csv(data_file)
-            exp_cdf = np.asarray(expected["cdf"])
-            exp_pdf = np.asarray(expected["pdf"])
 
             # # To rebenchmark
             # df = pd.DataFrame(index=np.arange(len(cdf)), columns=["cdf", "pdf", "r", "dt"])
@@ -86,6 +83,11 @@ class TestAllModels(unittest.TestCase):
             # df["r"] = rt_tuples[:,0]
             # df["dt"] = rt_tuples[:,1]
             # df.to_csv(data_file, index=False)
+
+            # Load
+            expected = pd.read_csv(data_file)
+            exp_cdf = np.asarray(expected["cdf"])
+            exp_pdf = np.asarray(expected["pdf"])
 
             # Compare results
             testing.assert_allclose(cdf, exp_cdf, atol=tolerance)
