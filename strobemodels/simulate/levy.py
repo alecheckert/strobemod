@@ -121,7 +121,7 @@ class LevyFlight3D(object):
             1D ndarray, dtype float64, the characteristic function
 
         """
-        return np.exp(-self.dt * np.power(self.scale * k, self.alpha))
+        return np.exp(-self.scale * self.dt * np.power(np.abs(k), self.alpha))
 
     def cdf_rad(self, r):
         """

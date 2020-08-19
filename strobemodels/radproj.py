@@ -38,11 +38,9 @@ def radproj(pmf, delta_z, renorm=False):
 
     # Compute the projection
     if len(pmf.shape) == 1:
-        result = (proj_matrix.T * dist).sum(axis=1)
+        result = (proj_matrix.T * pmf).sum(axis=1)
     elif len(pmf.shape) == 2:
-        result = np.empty(pmf.shape, dtype=np.float64)
-        for t in range(result.shape[0]):
-            result[t,:] = (proj_matrix.T * pmf[t,:]).sum(axis=1)
+        result = proj_matrix.T.dot(pmf.T).T 
 
     # Renormalize
     if renorm:

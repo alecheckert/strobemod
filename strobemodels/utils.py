@@ -12,6 +12,8 @@ from scipy import interpolate
 # 3D Hankel transform
 from hankel import SymmetricFourierTransform 
 HankelTrans3D = SymmetricFourierTransform(ndim=3, N=10000, h=0.005)
+# HankelTrans2D = SymmetricFourierTransform(ndim=2, N=10000, h=0.005)
+HankelTrans2D = SymmetricFourierTransform(ndim=2, N=250, h=0.01)
 
 # Univariate spline interpolation
 from scipy.interpolate import InterpolatedUnivariateSpline as spline 
@@ -762,7 +764,8 @@ def pdf_from_cf(func_cf, x, **kwargs):
     # Inverse transform
     return np.fft.fftshift(np.fft.irfft(cf, x.shape[0]))
 
-def pdf_from_cf_rad(func_cf, x, **kwargs):
+def pdf_from_cf_rad(func_cf, x, d=3, hankel_trans_2d=HankelTrans2D,
+    hankel_trans_3d=HankelTrans3D, **kwargs):
     """
     Evaluate a radially symmetric PDF defined on 3D space, given the spectral
     radial profile of its characteristic function.
@@ -780,6 +783,12 @@ def pdf_from_cf_rad(func_cf, x, **kwargs):
     					characteristic function
     	x			:	1D ndarray, the real-space points at which to evaluate
     					the PDF
+        d           :   int, 2 or 3. The number of spatial dimensions.
+        hankel_trans_2d, hankel_trans_3d:
+                        hankel.SymmetricFourierTransform objects, the
+                        transformer. If not given, defaults to a very high 
+                        precision instance (HankelTrans3D), but this should 
+                        be specified if greater speed is required.
     	kwargs      :	to *func_cf*
 
     returns
@@ -788,7 +797,12 @@ def pdf_from_cf_rad(func_cf, x, **kwargs):
 
     """
     F = lambda j: func_cf(j, **kwargs)
-    return HankelTrans3D.transform(F, x, ret_err=False, inverse=True)
+    if d == 3:
+        return hankel_trans_3d.transform(F, x, ret_err=False, inverse=True)
+    elif d == 2:
+        return hankel_trans_2d.transform(F, x, ret_err=False, inverse=True)
+    else:
+        raise RuntimeError("strobemodels.utils.pdf_from_cf_rad: only dimensions 2 and 3 supported")
 
 #########################################################
 ## OTHER UTILITIES USEFUL IN THE CORE FITTING ROUTINES ##

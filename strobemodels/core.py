@@ -339,7 +339,7 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
                 min_pars = re.x 
                 min_val = re.fun 
         except:
-            continue 
+            continue
 
     # Catch failed fits
     if min_pars is None:
@@ -347,8 +347,8 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
         if fall_back_to_model_cdf:
             print("Falling back to model CDF fitting method...")
             return fit_model_cdf(tracks, model=model, n_frames=n_frames, frame_interval=frame_interval,
-                pixel_size_um=pixel_size_um, bounds=bounds, guess=guess, plot=plot, show_plot=show_plot,
-                save_png=save_png, **model_kwargs)
+                pixel_size_um=pixel_size_um, bounds=bounds_antitranspose(bounds), guess=guess, plot=plot,
+                show_plot=show_plot, save_png=save_png, **model_kwargs)
         else:
             fit_pars = {k: np.nan for k in MODEL_PARS[model]}
             return fit_pars, None, None, None, None, None 
