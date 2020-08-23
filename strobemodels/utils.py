@@ -733,6 +733,38 @@ def radnorm(r, pdf, d=2):
     result /= result.sum()
     return result 
 
+###########################################################
+## PROJECTION OF 3D RADIALLY SYMMETRIC FUNCTIONS INTO 2D ##
+###########################################################
+
+@lru_cache(maxsize=1)
+def get_proj_matrix(dz=None):
+    """
+    Get a matrix operator for numerical projection of the distribution of 3D radial
+    displacements into 2D. This can be done either assuming free space, or assuming
+    that the displacements can only be observed in a thin focal plane.
+
+    args
+    ----
+        dz          :   float, focal depth in um. If not set, then we assume that 
+                        the focal depth is effectively infinite and all displacements
+                        are observed. Otherwise, the closest presimulated projection
+                        matrix is loaded.
+
+    returns
+    -------
+        2D ndarray of shape (5000, 5000), the projection matrix
+
+    """
+    if dz is None:
+        proj_file = os.path.join(DATA_DIR, "free_abel_transform.csv")
+    else:
+        options = np.array([0.7])
+        dz_close = options[np.argmin(np.abs(options - dz))]
+        proj_file = os.path.join(DATA_DIR, "abel_transform_dz-%.1fum.csv" % dz_close)
+    P = np.array(pd.read_csv(proj_file).drop("r_right_edge_um", axis=1))
+    return P 
+
 ###################################################
 ## GENERATING PDFs FROM CHARACTERISTIC FUNCTIONS ##
 ###################################################

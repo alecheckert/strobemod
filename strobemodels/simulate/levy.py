@@ -96,7 +96,7 @@ class LevyFlight3D(object):
                             function
 
     """
-    def __init__(self, R_max, bin_size=0.001, alpha=2.0, D=1.0, dt=0.01,
+    def __init__(self, R_max=20.0, bin_size=0.001, alpha=2.0, D=1.0, dt=0.01,
         method="radon", track_len=10):
 
         assert method in ["radon", "hankel", "radon_alt"]

@@ -46,11 +46,16 @@ from .utils import (
     defoc_prob_brownian,
     defoc_prob_fbm,
     pdf_from_cf_rad,
+    get_proj_matrix,
     radnorm
 )
 
 # For profiling
 global_iter_idx = 0
+
+# Frequency domain support, for evaluation of the Levy flight density
+real_support = np.arange(0.0, 100.001, 0.001)
+freq_support = 2 * np.pi * np.fft.rfftfreq(real_support.shape[0], d=0.001)
 
 def levy_flight_cf(k, alpha, scale, dt, loc_error):
     """
@@ -180,7 +185,154 @@ def pdf_1state_fbm(rt_tuples, hurst, D, loc_error, frame_interval=0.01, **kwargs
     var2 = D_mod * np.power(rt_tuples[:,1], 2*hurst) + 2 * (loc_error**2)
     return (rt_tuples[:,0] / var2) * np.exp(-(rt_tuples[:,0]**2) / (2*var2))
 
-def cdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, **kwargs):
+def cdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, dz=None, **kwargs):
+    """
+    Cumulative distribution function for the 2D radial displacements of a
+    single-state Levy flight. 
+
+    When *dz* is *None*, this model assumes that the focal plane is infinite
+    in depth - every displacement is recorded. When dz is set to a finite number
+    (say, 0.7 um), we assume that the Levy flight starts at a random position
+    in the focal volume and only displacements that end inside the focal volume
+    are counted for distribution of jump lengths.
+
+    important note
+    --------------
+        Levy flights are different than the other models in this package
+        in that they only support a single binning scheme: 0.0 to 5.0 um, with 
+        0.001 um bins. The contents of rt_tuples[:,0] is ignored, and is there
+        solely for all of the models in this package to have a unified I/O. The
+        reason is due to the projection of the Levy flight radial displacements
+        from their native 3D into 2D, which requires a projection matrix
+        (essentially a numerical Abel transform) that is costly to calculate for
+        each binning scheme.
+
+    args
+    ----
+        rt_tuples       :   2D ndarray, shape (n_points, 2), the independent
+                            tuples (r, dt) at which to evaluate the CDF
+        alpha           :   float between 1.0 and 2.0, the stability parameter
+                            for this Levy flight
+        D               :   float, the dispersion parameter for the Levy flight
+        loc_error       :   float, 1D localization error in um
+        dz              :   float, the focal depth. If *None*, we assume that 
+                            all jumps are recorded.
+
+    returns
+    -------
+        1D ndarray of shape (n_points,), the CDF
+
+    """
+    # Global real/frequency domain binning schemes
+    global freq_support
+    global real_support
+
+    # Get the projection matrix for this focal depth
+    proj = get_proj_matrix(dz)
+
+    # Identify the unique frame intervals at which to evaluate the CDF 
+    unique_times = np.unique(rt_tuples[:,1])
+
+    result = np.zeros(rt_tuples.shape[0], dtype=np.float64)
+    for t in unique_times:
+
+        # The set of observations corresponding to this frame interval
+        match = rt_tuples[:,1] == t
+
+        # Evaluate the characteristic function (the next few lines are equivalent to 
+        # the "radon_alt" method in the strobemodels.simulate.levy package)
+        cf = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D, t, loc_error)
+
+        # Transform to real space 
+        pdf = -real_support[:5001] * np.fft.irfft(cf, n=real_support.shape[0])[:5001]
+
+        # Linearly interpolate the center of each bin
+        pdf = 0.5 * (pdf[1:] + pdf[:-1])
+
+        # Project into 2D
+        pdf = proj @ pdf 
+
+        # Normalize
+        pdf /= pdf.sum()
+
+        # Accumulate to get the CDF
+        result[match] = np.cumsum(pdf)
+
+    return result 
+
+def pdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, dz=None, **kwargs):
+    """
+    Probability density function for the 2D radial displacements of a
+    single-state Levy flight. 
+
+    When *dz* is *None*, this model assumes that the focal plane is infinite
+    in depth - every displacement is recorded. When dz is set to a finite float
+    (say, 0.7 um), we assume that the Levy flight starts at a random position
+    in the focal volume and only displacements that end inside the focal volume
+    are counted for distribution of jump lengths.
+    
+    important note
+    --------------
+        Levy flights are different than the other models in this package
+        in that they only support a single binning scheme: 0.0 to 5.0 um, with 
+        0.001 um bins. The contents of rt_tuples[:,0] is ignored, and is there
+        solely for all of the models in this package to have a unified I/O. The
+        reason is due to the projection of the Levy flight radial displacements
+        from their native 3D into 2D, which requires a projection matrix
+        (essentially a numerical Abel transform) that is costly to calculate for
+        each binning scheme.
+
+    args
+    ----
+        rt_tuples       :   2D ndarray, shape (n_points, 2), the independent
+                            tuples (r, dt) at which to evaluate the PDF
+        alpha           :   float between 1.0 and 2.0, the stability parameter
+                            for this Levy flight
+        D               :   float, the dispersion parameter for the Levy flight
+        loc_error       :   float, 1D localization error in um
+        dz              :   float, the focal depth. If *None*, we assume that 
+                            all jumps are recorded.
+
+    returns
+    -------
+        1D ndarray of shape (n_points,), the PDF
+
+    """
+    # Global real/frequency domain binning schemes
+    global freq_support
+    global real_support
+
+    # Get the projection matrix for this focal depth
+    proj = get_proj_matrix(dz)
+
+    # Identify the unique frame intervals at which to evaluate the PDF
+    unique_times = np.unique(rt_tuples[:,1])
+
+    result = np.zeros(rt_tuples.shape[0], dtype=np.float64)
+    for t in unique_times:
+
+        # The set of observations corresponding to this frame interval
+        match = rt_tuples[:,1] == t
+
+        # Evaluate the characteristic function (the next few lines are equivalent to 
+        # the "radon_alt" method in the strobemodels.simulate.levy package)
+        cf = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D, t, loc_error)
+
+        # Transform to real space 
+        pdf = -real_support[:5001] * np.fft.irfft(cf, n=real_support.shape[0])[:5001]
+
+        # Linearly interpolate the center of each bin
+        pdf = 0.5 * (pdf[1:] + pdf[:-1])
+
+        # Project into 2D
+        pdf = proj @ pdf 
+
+        # Normalize
+        result[match] = (pdf / pdf.sum())
+
+    return result 
+
+def cdf_1state_levy_flight_hankel(rt_tuples, alpha, D, loc_error, **kwargs):
     """
     Distribution function for the 2D radial displacements of a single-state
     Levy flight. This model assumes that the focal depth is infinite - that
@@ -233,7 +385,7 @@ def cdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, **kwargs):
 
     return result 
 
-def pdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, **kwargs):
+def pdf_1state_levy_flight_hankel(rt_tuples, alpha, D, loc_error, **kwargs):
     """
     Probability density function for the 2D radial displacements of a single-state
     Levy flight. This model assumes that the focal depth is infinite - that we can 
@@ -1042,7 +1194,8 @@ CDF_MODELS = {
     "one_state_brownian": cdf_1state_brownian,
     "one_state_fbm": cdf_1state_fbm,
     "one_state_levy": cdf_1state_levy_flight,
-    "one_state_levy_zcorr": cdf_1state_levy_flight_zcorr,
+    "one_state_levy_hankel": cdf_1state_levy_flight_hankel,
+    # "one_state_levy_zcorr": cdf_1state_levy_flight_zcorr,
     "two_state_brownian": cdf_2state_brownian_uncorr,
     "two_state_brownian_zcorr": cdf_2state_brownian_zcorr,
     "two_state_fbm": cdf_2state_fbm_uncorr,
@@ -1056,7 +1209,8 @@ PDF_MODELS = {
     "one_state_brownian": pdf_1state_brownian,
     "one_state_fbm": pdf_1state_fbm,
     "one_state_levy": pdf_1state_levy_flight,
-    "one_state_levy_zcorr": pdf_1state_levy_flight_zcorr,
+    "one_state_levy_hankel": pdf_1state_levy_flight_hankel,
+    #"one_state_levy_zcorr": pdf_1state_levy_flight_zcorr,
     "two_state_brownian": pdf_2state_brownian_uncorr,
     "two_state_brownian_zcorr": pdf_2state_brownian_zcorr,
     "two_state_fbm": pdf_2state_fbm_uncorr,
@@ -1069,8 +1223,9 @@ PDF_MODELS = {
 MODEL_PARS = {
     "one_state_brownian": ["D", "loc_error"],
     "one_state_fbm": ["hurst", "D", "loc_error"],
-    "one_state_levy": ["alpha", "scale", "loc_error"],
-    "one_state_levy_zcorr": ["alpha", "scale", "loc_error"],
+    "one_state_levy": ["alpha", "D", "loc_error"],
+    "one_state_levy_hankel": ["alpha", "scale", "loc_error"],
+    # "one_state_levy_zcorr": ["alpha", "scale", "loc_error"],
     "two_state_brownian": ["f0", "D0", "D1", "loc_error"],
     "two_state_brownian_zcorr": ["f0", "D0", "D1", "loc_error"],
     "two_state_fbm": ["hurst", "f0", "D0", "D1", "loc_error"],
@@ -1093,13 +1248,17 @@ MODEL_PAR_BOUNDS = {
         np.array([1.0, np.inf, 0.1])
     ),
     "one_state_levy": (
+        np.array([1.0, 1.0e-8, 0.0]),
+        np.array([2.0, np.inf, 0.1])
+    ),
+    "one_state_levy_hankel": (
         np.array([1.0, 0.0, 0.0]),
         np.array([2.0, np.inf, 0.1])
     ),
-    "one_state_levy_zcorr": (
-        np.array([1.0, 0.0, 0.0]),
-        np.array([2.0, np.inf, 0.1])
-    ),
+    # "one_state_levy_zcorr": (
+    #     np.array([1.0, 0.0, 0.0]),
+    #     np.array([2.0, np.inf, 0.1])
+    # ),
     "two_state_brownian": (
         np.array([0.0, 1.0e-8, 0.5, 0.0]),
         np.array([1.0, 0.005, np.inf, 0.1])
@@ -1131,7 +1290,8 @@ MODEL_GUESS = {
     "one_state_brownian": np.array([1.0, 0.035]),
     "one_state_fbm": np.array([0.5, 1.0, 0.035]),
     "one_state_levy": np.array([2.0, 1.0, 0.035]),
-    "one_state_levy_zcorr": np.array([2.0, 1.0, 0.035]),
+    "one_state_levy_hankel": np.array([2.0, 1.0, 0.035]),
+    # "one_state_levy_zcorr": np.array([2.0, 1.0, 0.035]),
     "two_state_brownian": np.array([0.3, 0.01, 1.0, 0.035]),
     "two_state_brownian_zcorr": np.array([0.3, 0.001, 1.0, 0.035]),
     "two_state_fbm": np.array([0.5, 0.3, 0.001, 1.0, 0.035]),

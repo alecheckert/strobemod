@@ -202,7 +202,13 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
     # multiplying by the bin size 
     model_cdf_eval = model_cdf(rt_tuples, *popt).reshape(H.shape)
     rt_tuples[:,0] -= bin_size * 0.5
-    model_pmf_eval = model_pmf(rt_tuples, *popt).reshape(H.shape) * bin_size 
+
+    # Levy flight model PMFs are defined slightly differently than the others,
+    # so they require a different PDF->PMF normalization
+    if "levy" in model:
+        model_pmf_eval = model_pmf(rt_tuples, *popt).reshape(H.shape) 
+    else:
+        model_pmf_eval = model_pmf(rt_tuples, *popt).reshape(H.shape) * bin_size 
 
     # Show the result graphically, if desired
     if plot:
@@ -367,7 +373,13 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
     rt_tuples = generate_support(bin_edges, n_frames, frame_interval)
     model_cdf_eval = model_cdf(rt_tuples, *min_pars).reshape(H.shape)
     rt_tuples[:,0] -= bin_size * 0.5
-    model_pmf_eval = model_pmf(rt_tuples, *min_pars).reshape(H.shape) * bin_size 
+
+    # Evaluate the model PMF. For Levy flight models, this is slightly different 
+    # due to internal normalization
+    if "levy" in model:
+        model_pmf_eval = model_pmf(rt_tuples, *min_pars).reshape(H.shape)
+    else:
+        model_pmf_eval = model_pmf(rt_tuples, *min_pars).reshape(H.shape) * bin_size 
 
     # Show the result graphically, if desired
     if plot:
