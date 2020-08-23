@@ -336,7 +336,7 @@ class LevyFlight3D(object):
 
         # Accumulate to get the CDF, and include the 0 point
         cdf = np.concatenate(([0], np.cumsum(pdf)))
-        r = np.concatenate(([0], self.rc))
+        r = np.concatenate(([0], self.rc+self.bin_size*0.5))
 
         # Generate a spline interpolation to the CDF
         self._cdf_rad = spline(r, cdf)
@@ -368,7 +368,8 @@ class LevyFlight3D(object):
         r = np.concatenate(([0], self.rc))
 
         # Take the closest bin to each point as the initial guess
-        r0 = r[np.digitize(p, cdf)]
+        cdf = cdf / cdf[-1]
+        r0 = r[np.digitize(p, cdf)-1]
 
         # Do a few rounds of Newton to refine the guess
         for i in range(n_iter):
