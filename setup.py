@@ -13,6 +13,7 @@ REPO_DIR = os.path.split(os.path.abspath(__file__))[0]
 DATA_DIR = os.path.join(REPO_DIR, "strobemodels", "data")
 targets = [
     os.path.join(DATA_DIR, "fbm_defoc_splines.zip"),
+    os.path.join(DATA_DIR, "abel_transform_dz-0.7um.zip"),
     os.path.join(DATA_DIR, "free_abel_transform.zip")
 ]
 for t in targets:
