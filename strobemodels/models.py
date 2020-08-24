@@ -76,7 +76,7 @@ def levy_flight_cf(k, alpha, scale, dt, loc_error):
             at each point in *k*
 
     """
-    return np.exp(-scale * dt * np.power(np.abs(k), alpha) - (loc_error**2))
+    return np.exp(-scale * dt * np.power(np.abs(k), alpha) - (loc_error**2) * (k**2))
 
 def cdf_1state_brownian(rt_tuples, D, loc_error, **kwargs):
     """
