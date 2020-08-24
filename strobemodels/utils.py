@@ -490,7 +490,8 @@ def load_fbm_defoc_spline(dz=0.7):
 
     """
     # Available frame intervals
-    avail_dz = np.array([0.7])
+    avail_dz = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
+        1.1, 1.2, 1.3, 1.4, 1.5, 1.6])
 
     # Get the closest available focal depth
     m = np.argmin(np.abs(avail_dz - dz))
