@@ -402,8 +402,8 @@ def defoc_prob_brownian(D, n_frames, frame_interval, dz):
 
     returns
     -------
-        1D ndarray, shape (n_frames), the probability of defocalization 
-            at each frame
+        1D ndarray of shape (n_frames,), the probability that the particle
+            remains in the focal volume at the end of each frame
 
     """
     # Define the initial probability mass 
@@ -421,9 +421,62 @@ def defoc_prob_brownian(D, n_frames, frame_interval, dz):
     # Propagate over subsequent frame intervals
     result = np.zeros(n_frames, dtype=np.float64)
     for t in range(n_frames):
-        pmf = np.fft.fftshift(np.fft.irfft(np.fft.rfft(pmf) * g_rft))
+        pmf = np.fft.fftshift(np.fft.irfft(np.fft.rfft(pmf) * g_rft, n=pmf.shape[0]))
         pmf[outside] = 0.0
         result[t] = pmf.sum()
+
+    return result 
+
+def defoc_prob_levy(D, alpha, n_frames, frame_interval, dz):
+    """
+    Calculate the fraction of Levy flights remaining in the focal volume at 
+    a few frame intervals.
+
+    Specifically:
+
+    A Levy flight is generated ("photoactivated") with uniform probability 
+    across the focal depth *dz*, and then observed at regular intervals. If
+    the particle is outside the focal volume at any one interval, it is counted
+    as "lost" and is not observed for any subsequent frame, even if it diffuses
+    back into the focal volume.
+
+    This function returns the probability that such a particle is observed at 
+    each frame.
+
+    args
+    ----
+        D               :   float, diffusion coefficient in um^2 s^-1
+        alpha           :   float, stability parameter for the Levy flight
+        n_frames        :   int, the number of frame intervals
+        frame_interval  :   float, the frame interval in seconds
+        dz              :   float, focal depth in um
+
+    returns
+    -------
+        1D ndarray of shape (n_frames,), the probability that the particle
+            remains in the focal volume at the end of each frame
+
+    """
+    # Generate the initial profile in *z* on a support ranging from -5 to +5 um,
+    # with 1 nm bins
+    support = np.linspace(-5.0, 5.0, 10001)
+    hz = dz * 0.5 
+    inside = np.abs(support) <= hz 
+    outside = ~inside 
+    pmf = inside.astype(np.float64)
+    pmf /= pmf.sum()
+
+    # Generate the transfer function for PDF evolution
+    k = 2 * np.pi * np.fft.rfftfreq(support.shape[0], d=0.001)
+    cf = np.exp(-D * frame_interval * np.power(np.abs(k), alpha))
+
+    # Evolve the distribution, annihilating all probability density outside 
+    # the focal plane at each frame interval
+    result = np.zeros(n_frames, dtype=np.float64)
+    for t in range(n_frames):
+        pmf = np.fft.irfft(np.fft.rfft(pmf) * cf, n=pmf.shape[0])
+        pmf[outside] = 0
+        result[t] = pmf[inside].sum()
 
     return result 
 
@@ -760,7 +813,7 @@ def get_proj_matrix(dz=None):
     if dz is None:
         proj_file = os.path.join(DATA_DIR, "free_abel_transform.csv")
     else:
-        options = np.array([0.7])
+        options = np.array([0.5, 0.6, 0.7])
         dz_close = options[np.argmin(np.abs(options - dz))]
         proj_file = os.path.join(DATA_DIR, "abel_transform_dz-%.1fum.csv" % dz_close)
     P = np.array(pd.read_csv(proj_file).drop("r_right_edge_um", axis=1))
