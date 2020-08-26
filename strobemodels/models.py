@@ -45,6 +45,7 @@ from .radproj import radproj
 from .utils import (
     defoc_prob_brownian,
     defoc_prob_fbm,
+    defoc_prob_levy,
     pdf_from_cf_rad,
     get_proj_matrix,
     radnorm
@@ -372,7 +373,7 @@ def cdf_2state_levy_flight(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
         1D ndarray of shape (n_points,), the CDF
 
     """
-    # Gobal real/frequency domain binning schemes
+    # Global real/frequency domain binning schemes
     global freq_support
     global real_support
 
@@ -409,11 +410,12 @@ def cdf_2state_levy_flight(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
         match = frames == f
 
         # Evaluate the characteristic functions for each state
-        cf0 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D0, t, loc_error)
-        cf1 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D1, t, loc_error)
+        cf0 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D0, f*frame_interval, loc_error)
+        cf1 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D1, f*frame_interval, loc_error)
 
         # Combine the CFs
-        cf = f_adj_0[f-1] * cf0 + (1-f_adj_0[f-1]) * cf1 
+        # cf = f_adj_0[f-1] * cf0 + (1-f_adj_0[f-1]) * cf1 
+        cf = f0 * cf0 + (1 - f0) * cf1 
 
         # Transform to real space 
         pdf = -real_support[:5001] * np.fft.irfft(cf, n=real_support.shape[0])[:5001]
@@ -509,11 +511,12 @@ def pdf_2state_levy_flight(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
         match = frames == f
 
         # Evaluate the characteristic functions for each state
-        cf0 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D0, t, loc_error)
-        cf1 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D1, t, loc_error)
+        cf0 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D0, f*frame_interval, loc_error)
+        cf1 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D1, f*frame_interval, loc_error)
 
         # Combine the CFs
-        cf = f_adj_0[f-1] * cf0 + (1-f_adj_0[f-1]) * cf1 
+        # cf = f_adj_0[f-1] * cf0 + (1-f_adj_0[f-1]) * cf1 
+        cf = f0 * cf0 + (1- f0) * cf1 
 
         # Transform to real space 
         pdf = -real_support[:5001] * np.fft.irfft(cf, n=real_support.shape[0])[:5001]
@@ -528,6 +531,134 @@ def pdf_2state_levy_flight(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
         result[match] = pdf / pdf.sum()
 
     return result 
+
+def cdf_2state_levy_flight_alt(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
+    frame_interval=0.01, **kwargs):
+    # Global real/frequency domain binning schemes
+    global freq_support
+    global real_support
+
+    # Get the projection matrix for this focal depth
+    proj = get_proj_matrix(dz)
+
+    # Identify the unique frame intervals at which to evaluate the PDF
+    unique_times = np.unique(rt_tuples[:,1])
+
+    # Assign each observation to a frame interval
+    frames = (rt_tuples[:,1] / frame_interval).round(0).astype(np.int64)
+    n_frames = frames.max()
+    unique_frames = np.arange(1, n_frames+1)
+
+    # Evaluate the defocalization function for each diffusing state
+    if dz is None:
+        f_rem_0 = np.ones(len(unique_times))
+        f_rem_1 = np.ones(len(unique_times))
+    else:
+        f_rem_0 = defoc_prob_levy(D0, alpha, n_frames, frame_interval, dz)
+        f_rem_1 = defoc_prob_levy(D1, alpha, n_frames, frame_interval, dz)
+
+    # Adjusted state occupations
+    f_adj_0 = f0 * f_rem_0 
+    f_adj_1 = (1-f0) * f_rem_1 
+    norm = f_adj_0 + f_adj_1 
+    f_adj_0 = f_adj_0 / norm 
+
+    # Synthesize the mixed state PDF for each frame interval
+    result = np.zeros(rt_tuples.shape[0], dtype=np.float64)
+    for f in unique_frames:
+
+        # The set of observations corresponding to this frame interval
+        match = frames == f
+
+        # Evaluate the characteristic functions for each state
+        cf0 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D0, f*frame_interval, loc_error)
+        cf1 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D1, f*frame_interval, loc_error)
+
+        # Transform to real space 
+        pdf0 = -real_support[:5001] * np.fft.irfft(cf0, n=real_support.shape[0])[:5001]
+        pdf1 = -real_support[:5001] * np.fft.irfft(cf1, n=real_support.shape[0])[:5001]
+
+        # Linearly interpolate the center of each bin
+        pdf0 = 0.5 * (pdf0[1:] + pdf0[:-1])
+        pdf1 = 0.5 * (pdf1[1:] + pdf1[:-1])
+
+        # Project into 2D
+        pdf0 = proj @ pdf0
+        pdf1 = proj @ pdf1
+
+        # Normalize
+        pdf0 /= pdf0.sum()
+        pdf1 /= pdf1.sum()
+
+        # Combine the CDFs
+        result[match] = f_adj_0[f-1] * np.cumsum(pdf0) + (1 - f_adj_0[f-1]) * np.cumsum(pdf1)
+
+    return result    
+
+
+def pdf_2state_levy_flight_alt(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
+    frame_interval=0.01, **kwargs):
+    # Global real/frequency domain binning schemes
+    global freq_support
+    global real_support
+
+    # Get the projection matrix for this focal depth
+    proj = get_proj_matrix(dz)
+
+    # Identify the unique frame intervals at which to evaluate the PDF
+    unique_times = np.unique(rt_tuples[:,1])
+
+    # Assign each observation to a frame interval
+    frames = (rt_tuples[:,1] / frame_interval).round(0).astype(np.int64)
+    n_frames = frames.max()
+    unique_frames = np.arange(1, n_frames+1)
+
+    # Evaluate the defocalization function for each diffusing state
+    if dz is None:
+        f_rem_0 = np.ones(len(unique_times))
+        f_rem_1 = np.ones(len(unique_times))
+    else:
+        f_rem_0 = defoc_prob_levy(D0, alpha, n_frames, frame_interval, dz)
+        f_rem_1 = defoc_prob_levy(D1, alpha, n_frames, frame_interval, dz)
+
+    # Adjusted state occupations
+    f_adj_0 = f0 * f_rem_0 
+    f_adj_1 = (1-f0) * f_rem_1 
+    norm = f_adj_0 + f_adj_1 
+    f_adj_0 = f_adj_0 / norm 
+
+    # Synthesize the mixed state PDF for each frame interval
+    result = np.zeros(rt_tuples.shape[0], dtype=np.float64)
+    for f in unique_frames:
+
+        # The set of observations corresponding to this frame interval
+        match = frames == f
+
+        # Evaluate the characteristic functions for each state
+        cf0 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D0, f*frame_interval, loc_error)
+        cf1 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D1, f*frame_interval, loc_error)
+
+        # Transform to real space 
+        pdf0 = -real_support[:5001] * np.fft.irfft(cf0, n=real_support.shape[0])[:5001]
+        pdf1 = -real_support[:5001] * np.fft.irfft(cf1, n=real_support.shape[0])[:5001]
+
+        # Linearly interpolate the center of each bin
+        pdf0 = 0.5 * (pdf0[1:] + pdf0[:-1])
+        pdf1 = 0.5 * (pdf1[1:] + pdf1[:-1])
+
+        # Project into 2D
+        pdf0 = proj @ pdf0
+        pdf1 = proj @ pdf1
+
+        # Normalize
+        pdf0 /= pdf0.sum()
+        pdf1 /= pdf1.sum()
+
+        # Combine the PDFs
+        pdf = f_adj_0[f-1] * pdf0 + (1 - f_adj_0[f-1]) * pdf1
+        result[match] = pdf / pdf.sum()
+
+    return result    
 
 def cdf_1state_levy_flight_hankel(rt_tuples, alpha, D, loc_error, **kwargs):
     """

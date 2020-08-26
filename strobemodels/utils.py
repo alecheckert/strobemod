@@ -352,6 +352,89 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
 
     return H, bin_edges 
 
+def rad_disp_histogram_3d(tracks, n_frames=4, bin_size=0.001, 
+    max_jump=5.0, pixel_size_um=0.160, first_only=True):
+    """
+    Compile a histogram of 3D radial displacements for a set of
+    trajectories ("tracks").
+
+    args
+    ----
+        tracks          :   pandas.DataFrame
+        n_frames        :   int, the number of frame delays to consider.
+                            A separate histogram is compiled for each
+                            frame delay.
+        bin_size        :   float, the size of the bins in um. For typical
+                            experiments, this should not be changed because
+                            some diffusion models (e.g. Levy flights) are 
+                            contingent on the default binning parameters.
+        max_jump        :   float, the max radial displacement to consider in 
+                            um
+        pixel_size_um   :   float, the size of individual pixels in um
+        first_only      :   bool, only consider displacements relative to the 
+                            first localization of each track
+
+    returns
+    -------
+        (
+            2D ndarray of shape (n_frames, n_bins), the distribution of 
+                displacements at each time point;
+            1D ndarray of shape (n_bins+1), the edges of each bin in um
+        )
+
+    """
+    # Assign track lengths
+    if "track_length" not in tracks.columns:
+        tracks = track_length(tracks)
+
+    # Filter out unassigned localizations and singlets
+    T = tracks[
+        np.logical_and(tracks["trajectory"]>=0, tracks["track_length"]>1)
+    ][["frame", "trajectory", "z", "y", "x"]]
+
+    # Assign each localization an index in the respective track 
+    T["ones"] = np.ones(len(T), dtype=np.int64)
+    T["index_in_track"] = T.groupby("trajectory")["ones"].cumsum()
+    T = T.drop("ones", axis=1)
+
+    # Put a handle on the first localization of each track 
+    T["first_in_track"] = np.zeros(len(T), dtype="uint8")
+    T.loc[T["index_in_track"]==1, "first_in_track"] = 1
+
+    # Convert to ndarray for speed
+    T = np.asarray(T[["frame", "trajectory", "z", "y", "x", "first_in_track"]])
+
+    # Sort first by track, then by frame
+    T = T[np.lexsort((T[:,0], T[:,1])), :]
+
+    # Convert from pixels to um
+    T[:,2:5] = T[:,2:5] * pixel_size_um 
+
+    # Format output histogram
+    bin_edges = np.arange(0.0, max_jump+bin_size, bin_size)
+    n_bins = bin_edges.shape[0]-1
+    H = np.zeros((n_frames, n_bins), dtype=np.int64)
+
+    # For each frame interval and each track, calculate the vector change in position
+    for t in range(1, n_frames+1):
+        diff = T[t:,:] - T[:-t,:]
+
+        # Only consider vectors between points originating in the same track
+        diff = diff[diff[:,1] == 0.0, :]
+
+        # Only consider vectorss that match the delay being considered
+        diff = diff[diff[:,0] == t, :]
+
+        # Only consider vectors relative to the first localization in that track
+        if first_only:
+            diff = diff[diff[:,5] == -1, :]
+
+        # Calculate radial displacements
+        r_disps = np.sqrt((diff[:,2:5]**2).sum(axis=1))
+        H[t-1,:] = np.histogram(r_disps, bins=bin_edges)[0]
+
+    return H, bin_edges 
+
 ###############################
 ## DIFFUSION MODEL UTILITIES ##
 ###############################

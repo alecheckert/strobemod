@@ -52,8 +52,10 @@ import pandas as pd
 import matplotlib.pyplot as plt 
 
 # The global bin scheme for this module
-r_edges = np.linspace(0.0, 5.0, 5001)
-r_c = r_edges[:-1] + 0.0005
+r_edges = np.linspace(0.0, 10.0, 5001)
+n_bins = r_edges.shape[0] - 1
+bin_size = r_edges[1] - r_edges[0]
+r_c = r_edges[:-1] + bin_size * 0.5
 
 def radprojsim_bin(B0, B1, n_samples=1000000, n_iter=1, dz=None):
     """
@@ -85,8 +87,9 @@ def radprojsim_bin(B0, B1, n_samples=1000000, n_iter=1, dz=None):
 
     """
     global r_edges 
+    global n_bins
 
-    result = np.zeros(5000, dtype=np.float64)
+    result = np.zeros(n_bins, dtype=np.float64)
 
     for iter_idx in range(n_iter):
 
@@ -115,8 +118,8 @@ def radprojsim_bin(B0, B1, n_samples=1000000, n_iter=1, dz=None):
     result /= (n_iter * n_samples)
     return result 
 
-def radprojsim(n_samples=10000000, n_iter=10, num_workers=8, 
-    out_csv=None, dz=None):
+def radprojsim(n_samples=10000000, n_iter=10, num_workers=8, out_csv=None,
+    dz=None):
     """
     Combine the full numerical approximative Abel transform. For each 
     bin in the global bin scheme, compute the corresponding distribution
@@ -137,7 +140,8 @@ def radprojsim(n_samples=10000000, n_iter=10, num_workers=8,
 
     """
     global r_edges 
-    result = np.zeros((5000, 5000), dtype=np.float64)
+    global n_bins
+    result = np.zeros((n_bins, n_bins), dtype=np.float64)
 
     c = 0
 
@@ -147,7 +151,7 @@ def radprojsim(n_samples=10000000, n_iter=10, num_workers=8,
             n_samples=n_samples, n_iter=n_iter, dz=dz)
         return result 
 
-    results = [simulate_bin(i) for i in range(5000)]
+    results = [simulate_bin(i) for i in range(n_bins)]
 
     if num_workers > 1:
         scheduler = "processes"
@@ -158,7 +162,7 @@ def radprojsim(n_samples=10000000, n_iter=10, num_workers=8,
         results = dask.compute(*results, scheduler=scheduler, num_workers=num_workers)
 
     # Accumulate into a single ndarray
-    A = np.zeros((5000, 5000), dtype=np.float64)
+    A = np.zeros((n_bins, n_bins), dtype=np.float64)
     for i, r in enumerate(results):
         A[:,i] = r 
 
@@ -172,9 +176,8 @@ def radprojsim(n_samples=10000000, n_iter=10, num_workers=8,
     return A
 
 if __name__ == '__main__':
-    #result = radprojsim(n_samples=1000000, n_iter=10, num_workers=1)
-    result = radprojsim(n_samples=1000000, n_iter=10, num_workers=1, dz=0.7,
-        out_csv="abel_transform_dz-0.7um.csv")
+    result = radprojsim(n_samples=100000, n_iter=10, num_workers=4, dz=None,
+        out_csv="free_abel_transform_10um.csv")
     plt.imshow(result, vmax=result.max()*0.05, cmap='gray')
     plt.show(); plt.close()
 
