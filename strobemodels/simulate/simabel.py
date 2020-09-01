@@ -52,7 +52,7 @@ import pandas as pd
 import matplotlib.pyplot as plt 
 
 # The global bin scheme for this module
-r_edges = np.linspace(0.0, 10.0, 5001)
+r_edges = np.linspace(0.0, 20.0, 5001)
 n_bins = r_edges.shape[0] - 1
 bin_size = r_edges[1] - r_edges[0]
 r_c = r_edges[:-1] + bin_size * 0.5
@@ -176,8 +176,9 @@ def radprojsim(n_samples=10000000, n_iter=10, num_workers=8, out_csv=None,
     return A
 
 if __name__ == '__main__':
-    result = radprojsim(n_samples=100000, n_iter=10, num_workers=4, dz=None,
-        out_csv="free_abel_transform_10um.csv")
+    result = radprojsim(n_samples=1000000, n_iter=10,
+        num_workers=1, dz=0.6,
+        out_csv="abel_transform_dz-0.6um_20um.csv")
     plt.imshow(result, vmax=result.max()*0.05, cmap='gray')
     plt.show(); plt.close()
 

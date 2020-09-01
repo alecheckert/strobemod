@@ -45,7 +45,7 @@ from .plot import (
     plot_jump_length_cdf 
 )
 
-def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
+def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01, n_gaps=0,
     pixel_size_um=0.16, bounds=None, guess=None, plot=False, show_plot=True, save_png=None, 
     weight_timesteps=False, weight_short_disps=False, max_jump=5.0, **model_kwargs):
     """
@@ -60,6 +60,7 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
         n_frames            :   int, the maximum number of frame intervals to consider
                                 when modeling displacements
         frame_interval      :   float, time between frames in seconds
+        n_gaps              :   int, the number of gaps allowed during tracking
         pixel_size_um       :   float, size of pixels in um
         bounds              :   2-tuple of 1D ndarray, the lower and upper bounds on 
                                 the parameter estimates
@@ -90,10 +91,17 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
         )
 
     """
+    # Levy flights require a different binning scheme than the other models in 
+    # this package, due to a special projection in the model definition
+    if "levy" in model:
+        bin_size = 0.004  # um
+        max_jump = 5.0
+    else:
+        bin_size = 0.001  # um
+
     # Compile jump lengths
-    bin_size = 0.001  # um 
     H, bin_edges = rad_disp_histogram_2d(tracks, n_frames=n_frames, bin_size=bin_size,
-        pixel_size_um=pixel_size_um, max_jump=max_jump, first_only=True)
+        pixel_size_um=pixel_size_um, max_jump=max_jump, first_only=True, n_gaps=n_gaps)
     n_bins = bin_edges.shape[0] - 1
 
     # Catch pathological input: if there are no recorded displacements, then return
@@ -168,7 +176,8 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
     else:
         sigma = None 
 
-    # Optionally, bias the fit toward the shorter end of the jump length distribution
+    # Optionally, bias the fit to correct deviations in the shorter end of the jump
+    # length distribution
     if weight_short_disps:
         if sigma is None:
             sigma = np.ones(rt_tuples.shape[0], dtype=np.float64)
@@ -214,7 +223,10 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
     if plot:
 
         # Coarsen the histogram for the purpose of visualization
-        pmf_coarse, bin_edges_coarse = coarsen_histogram(pmfs, bin_edges, 20)
+        if "levy" in model:
+            pmf_coarse, bin_edges_coarse = coarsen_histogram(pmfs, bin_edges, 5)
+        else:
+            pmf_coarse, bin_edges_coarse = coarsen_histogram(pmfs, bin_edges, 20)
 
         # If the user wants to the save the plot, create names for the output PMF and CDF
         # plots

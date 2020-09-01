@@ -132,7 +132,10 @@ def concat_tracks(*tracks):
     # here is that if at least one of the tracks dataframes is nonempty,
     # we need to put that one first.
     df_lens = [len(t) for t in tracks]
-    tracks = [t for _, t in sorted(zip(df_lens, tracks))][::-1]
+    try:
+        tracks = [t for _, t in sorted(zip(df_lens, tracks))][::-1]
+    except ValueError:
+        pass
 
     # Iteratively concatenate each dataframe to the first while 
     # incrementing the trajectory index as necessary
@@ -270,7 +273,7 @@ def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16, fir
     return np.concatenate(result, axis=0)
 
 def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, 
-    max_jump=5.0, pixel_size_um=0.160, first_only=True):
+    max_jump=5.0, pixel_size_um=0.160, first_only=True, n_gaps=0):
     """
     Compile a histogram of radial displacements in the XY plane for 
     a set of trajectories ("tracks").
@@ -290,6 +293,7 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
         pixel_size_um   :   float, the size of individual pixels in um
         first_only      :   bool, only consider displacements relative to the 
                             first localization of each track
+        n_gaps          :   int, the number of gaps allowed during tracking
 
     returns
     -------
@@ -332,23 +336,53 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
     n_bins = bin_edges.shape[0]-1
     H = np.zeros((n_frames, n_bins), dtype=np.int64)
 
-    # For each frame interval and each track, calculate the vector change in position
-    for t in range(1, n_frames+1):
-        diff = T[t:,:] - T[:-t,:]
+    # Consider gap frames
+    if n_gaps > 0:
 
-        # Only consider vectors between points originating in the same track
-        diff = diff[diff[:,1] == 0.0, :]
+        # The maximum trajectory length, including gap frames
+        max_len = (n_gaps + 1) * n_frames + 1
 
-        # Only consider vectorss that match the delay being considered
-        diff = diff[diff[:,0] == t, :]
+        # Consider every shift up to the maximum trajectory length 
+        for l in range(1, max_len+1):
+            diff = T[l:,:] - T[:-l,:]
 
-        # Only consider vectors relative to the first localization in that track
-        if first_only:
-            diff = diff[diff[:,4] == -1, :]
+            # Only consider vectors between points originating from the same track
+            diff = diff[diff[:,1] == 0.0, :]
 
-        # Calculate radial displacements
-        r_disps = np.sqrt((diff[:,2:4]**2).sum(axis=1))
-        H[t-1,:] = np.histogram(r_disps, bins=bin_edges)[0]
+            # Only consider vectors relative to the first localization in each track
+            if first_only:
+                diff = diff[diff[:,4] == -1, :]
+
+            # Look for jumps corresponding to each frame interval being considered
+            for t in range(1, n_frames+1):
+
+                # Find vectors that match the delay being considered
+                subdiff = diff[diff[:,0] == t, :]
+
+                # Calculate radial displacements
+                r_disps = np.sqrt((subdiff[:,2:4]**2).sum(axis=1))
+                H[t-1,:] = H[t-1,:] + np.histogram(r_disps, bins=bin_edges)[0]
+
+    # No gap frames
+    else:
+
+        # For each frame interval and each track, calculate the vector change in position
+        for t in range(1, n_frames+1):
+            diff = T[t:,:] - T[:-t,:]
+
+            # Only consider vectors between points originating in the same track
+            diff = diff[diff[:,1] == 0.0, :]
+
+            # Only consider vectors that match the delay being considered
+            diff = diff[diff[:,0] == t, :]
+
+            # Only consider vectors relative to the first localization in that track
+            if first_only:
+                diff = diff[diff[:,4] == -1, :]
+
+            # Calculate radial displacements
+            r_disps = np.sqrt((diff[:,2:4]**2).sum(axis=1))
+            H[t-1,:] = np.histogram(r_disps, bins=bin_edges)[0]
 
     return H, bin_edges 
 
@@ -460,7 +494,7 @@ def generate_brownian_transfer_function(support, D, frame_interval):
     g /= g.sum()
     return np.fft.rfft(g)
 
-def defoc_prob_brownian(D, n_frames, frame_interval, dz):
+def defoc_prob_brownian(D, n_frames, frame_interval, dz, n_gaps=0):
     """
     Calculate the fraction of Brownian molecules remaining in the focal
     volume at a few timepoints.
@@ -482,6 +516,7 @@ def defoc_prob_brownian(D, n_frames, frame_interval, dz):
         n_frames    :   int, the number of frame intervals to consider
         frame_interval: float, in seconds
         dz          :   float, focal volume depth in um
+        n_gaps      :   int, the number of gap frames allowed during tracking
 
     returns
     -------
@@ -489,6 +524,9 @@ def defoc_prob_brownian(D, n_frames, frame_interval, dz):
             remains in the focal volume at the end of each frame
 
     """
+    if n_gaps > 0:
+        return defoc_prob_brownian_gapped(D, n_frames, frame_interval, dz, n_gaps=n_gaps)
+
     # Define the initial probability mass 
     s = (int(dz//2.0)+1) * 2
     support = np.linspace(-s, s, int(((2*s)//0.001)+2))[:-1]
@@ -510,7 +548,71 @@ def defoc_prob_brownian(D, n_frames, frame_interval, dz):
 
     return result 
 
-def defoc_prob_levy(D, alpha, n_frames, frame_interval, dz):
+def defoc_prob_brownian_gapped(D, n_frames, frame_interval, dz, n_gaps=0):
+    """
+    Calculate the fraction of Brownian molecules remaining in the 
+    focal volume at a few timepoints, allowing gap frames during which
+    the molecule is not present in the focal volum.
+
+    args
+    ----
+        D           :   float, diffusion coefficient in um^2 s^-1
+        n_frames    :   int, the number of frame intervals to consider
+        frame_interval: float, in seconds
+        dz          :   float, focal volume depth in um
+        n_gaps      :   int, the number of gap frames allowed during tracking
+
+    returns
+    -------
+        1D ndarray of shape (n_frames,), the probability that the particle
+            remains in the focal volume at the end of each frame       
+
+    """
+    # z-axis support
+    s = (int(dz//2.0)+1) * 2
+    support = np.linspace(-s, s, int(((2*s)//0.001)+2))[:-1]
+    n = support.shape[0]
+    hz = 0.5 * dz 
+    inside = np.abs(support) <= hz 
+    outside = ~inside 
+
+    # Buffer for probability mass
+    pmf = np.zeros((n_gaps+1, n), dtype=np.float64)
+
+    # Initially all probability mass starts out uniformly distributed 
+    # in the focal volume
+    pmf[0,:] = inside.astype(np.float64)
+    pmf[0,:] = pmf[0,:] / pmf[0,:].sum()
+
+    # A buffer for the probability density that lands inside the focal 
+    # volume at each frame
+    spillover = np.zeros(n, dtype=np.float64)
+
+    # Define the transfer function for this BM
+    g_rft = generate_brownian_transfer_function(support, D, frame_interval)
+
+    # The frame gaps to consider, in order of evaluation
+    gaps = list(range(n_gaps+1))[::-1]
+
+    # Fraction of molecules remaining at each frame
+    result = np.zeros(n_frames, dtype=np.float64)
+
+    # Propagate
+    for t in range(n_frames):
+
+        for g in gaps:
+            prop = np.fft.fftshift(np.fft.irfft(np.fft.rfft(pmf[g,:]) * g_rft, n=n))
+            spillover[inside] += prop[inside]
+            prop[inside] = 0
+            if g < n_gaps:
+                pmf[g+1,:] = prop
+
+        pmf[0,:] = spillover
+        result[t] = spillover.sum()
+        spillover[:] = 0
+    return result 
+
+def defoc_prob_levy(D, alpha, n_frames, frame_interval, dz, n_gaps=0):
     """
     Calculate the fraction of Levy flights remaining in the focal volume at 
     a few frame intervals.
@@ -540,6 +642,10 @@ def defoc_prob_levy(D, alpha, n_frames, frame_interval, dz):
             remains in the focal volume at the end of each frame
 
     """
+    if n_gaps > 0:
+        return defoc_prob_levy_gapped(D, alpha, n_frames, frame_interval,
+            dz, n_gaps=n_gaps)
+
     # Generate the initial profile in *z* on a support ranging from -5 to +5 um,
     # with 1 nm bins
     support = np.linspace(-5.0, 5.0, 10001)
@@ -561,6 +667,73 @@ def defoc_prob_levy(D, alpha, n_frames, frame_interval, dz):
         pmf[outside] = 0
         result[t] = pmf[inside].sum()
 
+    return result 
+
+def defoc_prob_levy_gapped(D, alpha, n_frames, frame_interval, dz, n_gaps=0):
+    """
+    Calculate the fraction of Levy flights remaining in the focal volume at 
+    a few frame intervals, allowing gap frames where the trajectories can 
+    be outside the focal volume before returning.
+
+    args
+    ----
+        D               :   float, diffusion coefficient in um^2 s^-1
+        alpha           :   float, stability parameter for the Levy flight
+        n_frames        :   int, the number of frame intervals
+        frame_interval  :   float, the frame interval in seconds
+        dz              :   float, focal depth in um
+        n_gaps          :   int, the number of gap frames to tolerate 
+                            before assuming the trajectory is dropped
+
+    returns
+    -------
+        1D ndarray of shape (n_frames,), the probability that the particle
+            remains in the focal volume at the end of each frame
+
+    """
+    # z-axis support
+    s = (int(dz//2.0)+1) * 2
+    support = np.linspace(-s, s, int(((2*s)//0.001)+2))[:-1]
+    n = support.shape[0]
+    hz = 0.5 * dz 
+    inside = np.abs(support) <= hz 
+    outside = ~inside 
+
+    # Buffer for probability mass
+    pmf = np.zeros((n_gaps+1, n), dtype=np.float64)
+
+    # Initially all probability mass starts out uniformly distributed 
+    # in the focal volume
+    pmf[0,:] = inside.astype(np.float64)
+    pmf[0,:] = pmf[0,:] / pmf[0,:].sum()
+
+    # A buffer for the probability density that lands inside the focal 
+    # volume at each frame
+    spillover = np.zeros(n, dtype=np.float64)
+
+    # Generate the transfer function for PDF evolution
+    k = 2 * np.pi * np.fft.rfftfreq(support.shape[0], d=0.001)
+    cf = np.exp(-D * frame_interval * np.power(np.abs(k), alpha))
+
+    # The frame gaps to consider, in order of evaluation
+    gaps = list(range(n_gaps+1))[::-1]
+
+    # Fraction of molecules remaining at each frame
+    result = np.zeros(n_frames, dtype=np.float64)
+
+    # Propagate
+    for t in range(n_frames):
+
+        for g in gaps:
+            prop = np.fft.irfft(np.fft.rfft(pmf[g,:]) * cf, n=n)
+            spillover[inside] += prop[inside]
+            prop[inside] = 0
+            if g < n_gaps:
+                pmf[g+1,:] = prop
+
+        pmf[0,:] = spillover
+        result[t] = spillover.sum()
+        spillover[:] = 0
     return result 
 
 def defoc_prob_fbm(D, hurst, n_frames, frame_interval, dz):
@@ -634,7 +807,7 @@ def load_fbm_defoc_spline(dz=0.7):
     sel_dz = avail_dz[m]
 
     # Path to this file
-    path = os.path.join(DATA_DIR, "fbm_defoc_splines_dz-%.1f.txt" % sel_dz)
+    path = os.path.join(DATA_DIR, "fbm_defoc_splines_dz-%.1f.csv" % sel_dz)
 
     # Load the spline coefficients
     tcks = load_spline_coefs_multiple_frame_interval(path)
@@ -894,11 +1067,11 @@ def get_proj_matrix(dz=None):
 
     """
     if dz is None:
-        proj_file = os.path.join(DATA_DIR, "free_abel_transform.csv")
+        proj_file = os.path.join(DATA_DIR, "free_abel_transform_20um.csv")
     else:
-        options = np.array([0.5, 0.6, 0.7])
+        options = np.array([0.7])
         dz_close = options[np.argmin(np.abs(options - dz))]
-        proj_file = os.path.join(DATA_DIR, "abel_transform_dz-%.1fum.csv" % dz_close)
+        proj_file = os.path.join(DATA_DIR, "abel_transform_dz-%.1fum_20um.csv" % dz_close)
     P = np.array(pd.read_csv(proj_file).drop("r_right_edge_um", axis=1))
     return P 
 

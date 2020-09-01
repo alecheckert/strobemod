@@ -29,7 +29,7 @@ DIFFUSION_MODELS = {
 }
 
 def strobe_infinite_plane(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=True, 
-    return_dataframe=True):
+    n_gaps=0, return_dataframe=True):
     """
     Simulate 3D trajectories with photoactivation in a HiLo geometry. Molecules
     are photoactivated with uniform probability in the axial column. Their displacements
@@ -47,6 +47,8 @@ def strobe_infinite_plane(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_ou
         exclude_outside :   bool, exclude localizations that lie outside of the detectable
                             z interval (-dz/2, dz/2). If False, the whole trajectories
                             are returned.
+        n_gaps          :   int, the number of gap frames to tolerate in trajectories before
+                            dropping them. Only applies if *exclude_outside* is True.
         return_dataframe:   bool, format results as a pandas.DataFrame rather than a 
                             numpy.ndarray
 
@@ -69,14 +71,39 @@ def strobe_infinite_plane(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_ou
     # Exclude molecules outside of the slice from observation by setting their
     # values to NaN
     if exclude_outside:
-        outside = np.zeros(n_tracks, dtype="bool")
-        for t in range(model_obj.track_len):
 
-            # If a molecule is observed outside the slice once, it is lost for 
-            # all subsequent frame intervals
-            outside = np.logical_or(outside, np.abs(tracks[:,t,0])>hz)
-            for d in range(3):
-                tracks[:,t,d][outside] = np.nan 
+        # Simulate tracking with gaps: if a particle returns to the focal volume
+        # after being outside, it can be observed again and reconnected with the
+        # previous part of its trajectory
+        # if gaps:
+        #     outside = np.abs(tracks[:,:,0]) > hz
+        #     for d in range(3):
+        #         tracks[:,:,d][outside] = np.nan
+
+        if n_gaps > 0:
+            gap_count = np.zeros(n_tracks, dtype=np.int64)
+            dead = np.zeros(n_tracks, dtype=np.bool)
+
+            for t in range(model_obj.track_len):
+                outside = np.abs(tracks[:,t,0]) > hz
+                gap_count[outside] += 1
+                gap_count[~outside] = 0
+                dead = np.logical_or(dead, gap_count>n_gaps)
+                set_nan = np.logical_or(outside, dead)
+                for d in range(3):
+                    tracks[:,t,d][set_nan] = np.nan
+
+        # Simulate tracking without gaps, so that if a molecule lies outside
+        # of the focal volume at any given frame, it is lost for all future frames
+        else:
+            outside = np.zeros(n_tracks, dtype="bool")
+            for t in range(model_obj.track_len):
+
+                # If a molecule is observed outside the slice once, it is lost for 
+                # all subsequent frame intervals
+                outside = np.logical_or(outside, np.abs(tracks[:,t,0])>hz)
+                for d in range(3):
+                    tracks[:,t,d][outside] = np.nan 
 
     # Add localization error, if desired
     if loc_error != 0.0:
@@ -89,7 +116,7 @@ def strobe_infinite_plane(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_ou
         return tracks 
 
 def strobe_one_state_infinite_plane(model, n_tracks, track_len=10, dz=0.7, dt=0.01,
-    loc_error=0.0, exclude_outside=True, return_dataframe=True, **model_kwargs):
+    loc_error=0.0, exclude_outside=True, n_gaps=0, return_dataframe=True, **model_kwargs):
     """
     Simulate a single diffusing state in a HiLo geometry.
 
@@ -101,6 +128,7 @@ def strobe_one_state_infinite_plane(model, n_tracks, track_len=10, dz=0.7, dt=0.
         loc_error       :   float, localization error 
         exclude_outside :   bool, remove positions that fall outside the focal 
                             depth 
+        n_gaps          :   int, number of gap frames to tolerate
         return_dataframe:   bool, format results as a pandas.DataFrame
         model_kwargs    :   for generating the diffusion model 
 
@@ -114,10 +142,10 @@ def strobe_one_state_infinite_plane(model, n_tracks, track_len=10, dz=0.7, dt=0.
     """
     model_obj = DIFFUSION_MODELS[model](dt=dt, track_len=track_len, **model_kwargs)
     return strobe_infinite_plane(model_obj, n_tracks, dz=dz, loc_error=loc_error,
-        exclude_outside=exclude_outside, return_dataframe=return_dataframe)
+        exclude_outside=exclude_outside, n_gaps=n_gaps, return_dataframe=return_dataframe)
     
 def strobe_two_state_infinite_plane(model_0, n_tracks, model_1=None, f0=0.0, track_len=10,
-    dz=0.7, dt=0.01, loc_error=0.0, exclude_outside=True, return_dataframe=True, 
+    dz=0.7, dt=0.01, loc_error=0.0, exclude_outside=True, n_gaps=0, return_dataframe=True, 
     model_0_kwargs={}, model_1_kwargs={}):
     """
     Simulate two diffusing states in a HiLo geometry.
@@ -135,6 +163,7 @@ def strobe_two_state_infinite_plane(model_0, n_tracks, model_1=None, f0=0.0, tra
         loc_error       :   float, 1D normal localization error in um
         exclude_outside :   bool, remove positions that fall outside the 
                             focal depth 
+        n_gaps          :   int, the number of gap frames to tolerate during tracking
         return_dataframe:   bool, format result as a pandas.DataFrame
         model_0_kwargs  :   dict, model parameters for state 0
         model_1_kwargs  :   dict, model parameters for state 1
@@ -158,10 +187,10 @@ def strobe_two_state_infinite_plane(model_0, n_tracks, model_1=None, f0=0.0, tra
     # Generate simulators for each state
     model_obj_0 = DIFFUSION_MODELS[model_0](dt=dt, track_len=track_len, **model_0_kwargs)
     tracks_0 = strobe_infinite_plane(model_obj_0, N0, dz=dz, loc_error=loc_error,
-        exclude_outside=exclude_outside, return_dataframe=return_dataframe)   
+        exclude_outside=exclude_outside, n_gaps=n_gaps, return_dataframe=return_dataframe)   
     model_obj_1 = DIFFUSION_MODELS[model_1](dt=dt, track_len=track_len, **model_1_kwargs)
     tracks_1 = strobe_infinite_plane(model_obj_1, N1, dz=dz, loc_error=loc_error,
-        exclude_outside=exclude_outside, return_dataframe=return_dataframe)
+        exclude_outside=exclude_outside, n_gaps=n_gaps, return_dataframe=return_dataframe)
 
     # Concatenate trajectories from both states
     if isinstance(tracks_0, pd.DataFrame):
@@ -172,7 +201,7 @@ def strobe_two_state_infinite_plane(model_0, n_tracks, model_1=None, f0=0.0, tra
     return tracks 
 
 def strobe_three_state_infinite_plane(model_0, n_tracks, model_1=None, model_2=None, f0=0.0, f1=0.0,
-    track_len=10, dz=0.7, dt=0.01, loc_error=0.0, exclude_outside=True, return_dataframe=True,
+    track_len=10, dz=0.7, dt=0.01, loc_error=0.0, exclude_outside=True, n_gaps=False, return_dataframe=True,
     model_0_kwargs={}, model_1_kwargs={}, model_2_kwargs={}):
     """
     Simulate three diffusing states in a HiLo geometry.
@@ -192,6 +221,7 @@ def strobe_three_state_infinite_plane(model_0, n_tracks, model_1=None, model_2=N
         loc_error       :   float, 1D normal localization error in um
         exclude_outside :   bool, remove positions that fall outside the 
                             focal depth 
+        n_gaps          :   int, the number of gap frames to tolerate
         return_dataframe:   bool, format result as a pandas.DataFrame
         model_0_kwargs  :   dict, model parameters for state 0
         model_1_kwargs  :   dict, model parameters for state 1
@@ -221,11 +251,11 @@ def strobe_three_state_infinite_plane(model_0, n_tracks, model_1=None, model_2=N
 
     # Run the simulations
     tracks_0 = strobe_infinite_plane(model_obj_0, N0, dz=dz, loc_error=loc_error,
-        exclude_outside=exclude_outside, return_dataframe=return_dataframe)
+        exclude_outside=exclude_outside, n_gaps=n_gaps, return_dataframe=return_dataframe)
     tracks_1 = strobe_infinite_plane(model_obj_1, N1, dz=dz, loc_error=loc_error,
-        exclude_outside=exclude_outside, return_dataframe=return_dataframe)
+        exclude_outside=exclude_outside, n_gaps=n_gaps, return_dataframe=return_dataframe)
     tracks_2 = strobe_infinite_plane(model_obj_2, N2, dz=dz, loc_error=loc_error,
-        exclude_outside=exclude_outside, return_dataframe=return_dataframe)
+        exclude_outside=exclude_outside, n_gaps=n_gaps, return_dataframe=return_dataframe)
 
     # Concatenate trajectories from both states
     if isinstance(tracks_0, pd.DataFrame):

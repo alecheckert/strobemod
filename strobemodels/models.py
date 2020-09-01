@@ -199,14 +199,12 @@ def cdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, dz=None, **kwargs):
 
     important note
     --------------
-        Levy flights are different than the other models in this package
-        in that they only support a single binning scheme: 0.0 to 5.0 um, with 
-        0.001 um bins. The contents of rt_tuples[:,0] is ignored, and is there
-        solely for all of the models in this package to have a unified I/O. The
-        reason is due to the projection of the Levy flight radial displacements
-        from their native 3D into 2D, which requires a projection matrix
-        (essentially a numerical Abel transform) that is costly to calculate for
-        each binning scheme.
+        The implementation of Levy flights in this model package requires a
+        special projection that can only accommodate one binning scheme for the
+        jumps: 0.0 to 20.0 um, with 0.004 um (4 nm) bins for a total of 1250
+        bins per timepoint.
+
+        *rt_tuples* must be supplied in this format.
 
     args
     ----
@@ -234,7 +232,7 @@ def cdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, dz=None, **kwargs):
     # Identify the unique frame intervals at which to evaluate the CDF 
     unique_times = np.unique(rt_tuples[:,1])
 
-    result = np.zeros(rt_tuples.shape[0], dtype=np.float64)
+    result = np.zeros(len(unique_times) * 1250, dtype=np.float64)
     for t in unique_times:
 
         # The set of observations corresponding to this frame interval
@@ -244,20 +242,25 @@ def cdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, dz=None, **kwargs):
         # the "radon_alt" method in the strobemodels.simulate.levy package)
         cf = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D, t, loc_error)
 
-        # Transform to real space 
-        pdf = -real_support[:5001] * np.fft.irfft(cf, n=real_support.shape[0])[:5001]
+        # Transform to real space, and take all bins up to 20 um
+        pdf = -real_support[:20001] * np.fft.irfft(cf, n=real_support.shape[0])[:20001]
 
         # Linearly interpolate the center of each bin
         pdf = 0.5 * (pdf[1:] + pdf[:-1])
 
-        # Project into 2D
-        pdf = proj @ pdf 
+        # Combine 1 nm bins into 4 nm bins
+        pdf = pdf[0::4] + pdf[1::4] + pdf[2::4] + pdf[3::4]
 
-        # Normalize
+        # Normalize on the full 0-20 um interval
         pdf /= pdf.sum()
 
+        # Project into 2D
+        pdf = (proj @ pdf)[:1250]
+
         # Accumulate to get the CDF
-        result[match] = np.cumsum(pdf)
+        cdf = np.cumsum(pdf)
+        cdf = cdf / cdf[-1]
+        result[match] = cdf 
 
     return result 
 
@@ -274,14 +277,12 @@ def pdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, dz=None, **kwargs):
     
     important note
     --------------
-        Levy flights are different than the other models in this package
-        in that they only support a single binning scheme: 0.0 to 5.0 um, with 
-        0.001 um bins. The contents of rt_tuples[:,0] is ignored, and is there
-        solely for all of the models in this package to have a unified I/O. The
-        reason is due to the projection of the Levy flight radial displacements
-        from their native 3D into 2D, which requires a projection matrix
-        (essentially a numerical Abel transform) that is costly to calculate for
-        each binning scheme.
+        The implementation of Levy flights in this model package requires a
+        special projection that can only accommodate one binning scheme for the
+        jumps: 0.0 to 20.0 um, with 0.004 um (4 nm) bins for a total of 1250
+        bins per timepoint.
+
+        *rt_tuples* must be supplied in this format.
 
     args
     ----
@@ -306,10 +307,10 @@ def pdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, dz=None, **kwargs):
     # Get the projection matrix for this focal depth
     proj = get_proj_matrix(dz)
 
-    # Identify the unique frame intervals at which to evaluate the PDF
+    # Identify the unique frame intervals at which to evaluate the CDF 
     unique_times = np.unique(rt_tuples[:,1])
 
-    result = np.zeros(rt_tuples.shape[0], dtype=np.float64)
+    result = np.zeros(len(unique_times) * 1250, dtype=np.float64)
     for t in unique_times:
 
         # The set of observations corresponding to this frame interval
@@ -319,58 +320,67 @@ def pdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, dz=None, **kwargs):
         # the "radon_alt" method in the strobemodels.simulate.levy package)
         cf = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D, t, loc_error)
 
-        # Transform to real space 
-        pdf = -real_support[:5001] * np.fft.irfft(cf, n=real_support.shape[0])[:5001]
+        # Transform to real space, and take all bins up to 20 um
+        pdf = -real_support[:20001] * np.fft.irfft(cf, n=real_support.shape[0])[:20001]
 
         # Linearly interpolate the center of each bin
         pdf = 0.5 * (pdf[1:] + pdf[:-1])
 
+        # Combine 1 nm bins into 4 nm bins
+        pdf = pdf[0::4] + pdf[1::4] + pdf[2::4] + pdf[3::4]
+
+        # Normalize on the full 0-20 um interval
+        pdf /= pdf.sum()
+
         # Project into 2D
-        pdf = proj @ pdf 
+        pdf = (proj @ pdf)[:1250]
 
         # Normalize
-        result[match] = (pdf / pdf.sum())
+        result[match] = pdf / pdf.sum()
 
     return result 
 
 def cdf_2state_levy_flight(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
     frame_interval=0.01, **kwargs):
     """
-    Cumulative distribution function for the 2D radial displacements of a
-    two-state Levy flight in two dimensions. Each state is assumed to have
-    the same stability parameter.
+    Cumulative distribution function for the 2D radial displacements of 
+    a two-state Levy flight in the XY plane of a microscope.
 
-    When *dz* is *None*, we assume that the focal depth is infinite in 
-    extent - all displacements are recorded, with no bias due to 
-    defocalization.
+    This model assumes that the rate of state transitions is negligible
+    and that the stability parameter *alpha* is the same for both states.
+
+    When *dz* is *None*, this model assumes that the focal plane is infinite
+    in depth - every displacement is recorded. When dz is set to a finite float
+    (say, 0.7 um), we assume that the Levy flight starts at a random position
+    in the focal volume and only displacements that end inside the focal volume
+    are counted for distribution of jump lengths.
 
     important note
     --------------
-        Levy flights are different than the other models in this package
-        in that they only support a single binning scheme: 0.0 to 5.0 um, with 
-        0.001 um bins. The contents of rt_tuples[:,0] is ignored, and is there
-        solely for all of the models in this package to have a unified I/O. The
-        reason is due to the projection of the Levy flight radial displacements
-        from their native 3D into 2D, which requires a projection matrix
-        (essentially a numerical Abel transform) that is costly to calculate for
-        each binning scheme.
+        The implementation of Levy flights in this model package requires a
+        special projection that can only accommodate one binning scheme for the
+        jumps: 0.0 to 20.0 um, with 0.004 um (4 nm) bins for a total of 1250
+        bins per timepoint.
+
+        *rt_tuples* must be supplied in this format.
 
     args
     ----
         rt_tuples       :   2D ndarray, shape (n_points, 2), the independent
                             tuples (r, dt) at which to evaluate the CDF
         alpha           :   float between 1.0 and 2.0, the stability parameter
-                            for both states of this Levy flight
-        D0              :   float, the dispersion parameter for the first state
-        D1              :   float, the dispersion parameter for the second state
+                            for this Levy flight
+        f0              :   float, the fraction of molecules in the slower
+                            diffusing state
+        D0              :   float, dispersion for the slower diffusing state
+        D1              :   float, dispersion for the faster diffusing state 
         loc_error       :   float, 1D localization error in um
         dz              :   float, the focal depth. If *None*, we assume that 
                             all jumps are recorded.
-        frame_interval  :   float, frame interval in seconds 
 
     returns
     -------
-        1D ndarray of shape (n_points,), the CDF
+        1D ndarray of shape (n_points,), the CDF 
 
     """
     # Global real/frequency domain binning schemes
@@ -380,9 +390,6 @@ def cdf_2state_levy_flight(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
     # Get the projection matrix for this focal depth
     proj = get_proj_matrix(dz)
 
-    # Identify the unique frame intervals at which to evaluate the PDF
-    unique_times = np.unique(rt_tuples[:,1])
-
     # Assign each observation to a frame interval
     frames = (rt_tuples[:,1] / frame_interval).round(0).astype(np.int64)
     n_frames = frames.max()
@@ -390,19 +397,19 @@ def cdf_2state_levy_flight(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
 
     # Evaluate the defocalization function for each diffusing state
     if dz is None:
-        f_rem_0 = np.ones(len(unique_times))
-        f_rem_1 = np.ones(len(unique_times))
+        f_rem_0 = np.ones(len(unique_frames))
+        f_rem_1 = np.ones(len(unique_frames))
     else:
         f_rem_0 = defoc_prob_levy(D0, alpha, n_frames, frame_interval, dz)
         f_rem_1 = defoc_prob_levy(D1, alpha, n_frames, frame_interval, dz)
 
-    # Adjusted state occupations
+    # State occupations adjusted for defocalization
     f_adj_0 = f0 * f_rem_0 
     f_adj_1 = (1-f0) * f_rem_1 
     norm = f_adj_0 + f_adj_1 
     f_adj_0 = f_adj_0 / norm 
 
-    # Synthesize the mixed state PDF for each frame interval
+    # Synthesize the mixed state CDF for each frame interval
     result = np.zeros(rt_tuples.shape[0], dtype=np.float64)
     for f in unique_frames:
 
@@ -413,127 +420,75 @@ def cdf_2state_levy_flight(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
         cf0 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D0, f*frame_interval, loc_error)
         cf1 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D1, f*frame_interval, loc_error)
 
-        # Combine the CFs
-        # cf = f_adj_0[f-1] * cf0 + (1-f_adj_0[f-1]) * cf1 
-        cf = f0 * cf0 + (1 - f0) * cf1 
-
-        # Transform to real space 
-        pdf = -real_support[:5001] * np.fft.irfft(cf, n=real_support.shape[0])[:5001]
+        # Transform to real space (taking bins up to 20.0 um)
+        pdf0 = -real_support[:20001] * np.fft.irfft(cf0, n=real_support.shape[0])[:20001]
+        pdf1 = -real_support[:20001] * np.fft.irfft(cf1, n=real_support.shape[0])[:20001]
 
         # Linearly interpolate the center of each bin
-        pdf = 0.5 * (pdf[1:] + pdf[:-1])
+        pdf0 = 0.5 * (pdf0[1:] + pdf0[:-1])
+        pdf1 = 0.5 * (pdf1[1:] + pdf1[:-1])
 
-        # Project into 2D
-        pdf = proj @ pdf 
+        # Aggregate the 1 nm bins into 4 nm bins
+        pdf0 = pdf0[0::4] + pdf0[1::4] + pdf0[2::4] + pdf0[3::4]
+        pdf1 = pdf1[0::4] + pdf1[1::4] + pdf1[2::4] + pdf1[3::4]
 
         # Normalize
-        pdf /= pdf.sum()
+        pdf0 /= pdf0.sum()
+        pdf1 /= pdf1.sum()       
 
-        # Assign the result to the corresponding observations
-        result[match] = np.cumsum(pdf)
+        # Project into 2D
+        pdf0 = (proj @ pdf0)[:1250]
+        pdf1 = (proj @ pdf1)[:1250]
 
-    return result 
+        # Combine the CDFs and renormalize
+        cdf_comb = f_adj_0[f-1] * np.cumsum((pdf0/pdf0.sum())) + (1 - f_adj_0[f-1]) * np.cumsum((pdf1/pdf1.sum()))
+        result[match] = cdf_comb / cdf_comb[-1]
+
+    return result
 
 def pdf_2state_levy_flight(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
     frame_interval=0.01, **kwargs):
     """
-    Probability density function for the 2D radial displacements of a
-    two-state Levy flight in two dimensions. Each state is assumed to have
-    the same stability parameter.
+    Probability density function for the 2D radial displacements of 
+    a two-state Levy flight in the XY plane of a microscope.
 
-    When *dz* is *None*, we assume that the focal depth is infinite in 
-    extent - all displacements are recorded, with no bias due to 
-    defocalization.
+    This model assumes that the rate of state transitions is negligible
+    and that the stability parameter *alpha* is the same for both states.
+
+    When *dz* is *None*, this model assumes that the focal plane is infinite
+    in depth - every displacement is recorded. When dz is set to a finite float
+    (say, 0.7 um), we assume that the Levy flight starts at a random position
+    in the focal volume and only displacements that end inside the focal volume
+    are counted for distribution of jump lengths.
 
     important note
     --------------
-        Levy flights are different than the other models in this package
-        in that they only support a single binning scheme: 0.0 to 5.0 um, with 
-        0.001 um bins. The contents of rt_tuples[:,0] is ignored, and is there
-        solely for all of the models in this package to have a unified I/O. The
-        reason is due to the projection of the Levy flight radial displacements
-        from their native 3D into 2D, which requires a projection matrix
-        (essentially a numerical Abel transform) that is costly to calculate for
-        each binning scheme.
+        The implementation of Levy flights in this model package requires a
+        special projection that can only accommodate one binning scheme for the
+        jumps: 0.0 to 20.0 um, with 0.004 um (4 nm) bins for a total of 1250
+        bins per timepoint.
+
+        *rt_tuples* must be supplied in this format.
 
     args
     ----
         rt_tuples       :   2D ndarray, shape (n_points, 2), the independent
                             tuples (r, dt) at which to evaluate the PDF
         alpha           :   float between 1.0 and 2.0, the stability parameter
-                            for both states of this Levy flight
-        D0              :   float, the dispersion parameter for the first state
-        D1              :   float, the dispersion parameter for the second state
+                            for this Levy flight
+        f0              :   float, the fraction of molecules in the slower
+                            diffusing state
+        D0              :   float, dispersion for the slower diffusing state
+        D1              :   float, dispersion for the faster diffusing state 
         loc_error       :   float, 1D localization error in um
         dz              :   float, the focal depth. If *None*, we assume that 
                             all jumps are recorded.
-        frame_interval  :   float, frame interval in seconds 
 
     returns
     -------
         1D ndarray of shape (n_points,), the PDF
 
     """
-    # Gobal real/frequency domain binning schemes
-    global freq_support
-    global real_support
-
-    # Get the projection matrix for this focal depth
-    proj = get_proj_matrix(dz)
-
-    # Identify the unique frame intervals at which to evaluate the PDF
-    unique_times = np.unique(rt_tuples[:,1])
-
-    # Assign each observation to a frame interval
-    frames = (rt_tuples[:,1] / frame_interval).round(0).astype(np.int64)
-    n_frames = frames.max()
-    unique_frames = np.arange(1, n_frames+1)
-
-    # Evaluate the defocalization function for each diffusing state
-    if dz is None:
-        f_rem_0 = np.ones(len(unique_times))
-        f_rem_1 = np.ones(len(unique_times))
-    else:
-        f_rem_0 = defoc_prob_levy(D0, alpha, n_frames, frame_interval, dz)
-        f_rem_1 = defoc_prob_levy(D1, alpha, n_frames, frame_interval, dz)
-
-    # Adjusted state occupations
-    f_adj_0 = f0 * f_rem_0 
-    f_adj_1 = (1-f0) * f_rem_1 
-    norm = f_adj_0 + f_adj_1 
-    f_adj_0 = f_adj_0 / norm 
-
-    # Synthesize the mixed state PDF for each frame interval
-    result = np.zeros(rt_tuples.shape[0], dtype=np.float64)
-    for f in unique_frames:
-
-        # The set of observations corresponding to this frame interval
-        match = frames == f
-
-        # Evaluate the characteristic functions for each state
-        cf0 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D0, f*frame_interval, loc_error)
-        cf1 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D1, f*frame_interval, loc_error)
-
-        # Combine the CFs
-        # cf = f_adj_0[f-1] * cf0 + (1-f_adj_0[f-1]) * cf1 
-        cf = f0 * cf0 + (1- f0) * cf1 
-
-        # Transform to real space 
-        pdf = -real_support[:5001] * np.fft.irfft(cf, n=real_support.shape[0])[:5001]
-
-        # Linearly interpolate the center of each bin
-        pdf = 0.5 * (pdf[1:] + pdf[:-1])
-
-        # Project into 2D
-        pdf = proj @ pdf 
-
-        # Normalize
-        result[match] = pdf / pdf.sum()
-
-    return result 
-
-def cdf_2state_levy_flight_alt(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
-    frame_interval=0.01, **kwargs):
     # Global real/frequency domain binning schemes
     global freq_support
     global real_support
@@ -541,9 +496,6 @@ def cdf_2state_levy_flight_alt(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
     # Get the projection matrix for this focal depth
     proj = get_proj_matrix(dz)
 
-    # Identify the unique frame intervals at which to evaluate the PDF
-    unique_times = np.unique(rt_tuples[:,1])
-
     # Assign each observation to a frame interval
     frames = (rt_tuples[:,1] / frame_interval).round(0).astype(np.int64)
     n_frames = frames.max()
@@ -551,13 +503,13 @@ def cdf_2state_levy_flight_alt(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
 
     # Evaluate the defocalization function for each diffusing state
     if dz is None:
-        f_rem_0 = np.ones(len(unique_times))
-        f_rem_1 = np.ones(len(unique_times))
+        f_rem_0 = np.ones(len(unique_frames))
+        f_rem_1 = np.ones(len(unique_frames))
     else:
         f_rem_0 = defoc_prob_levy(D0, alpha, n_frames, frame_interval, dz)
         f_rem_1 = defoc_prob_levy(D1, alpha, n_frames, frame_interval, dz)
 
-    # Adjusted state occupations
+    # State occupations adjusted for defocalization
     f_adj_0 = f0 * f_rem_0 
     f_adj_1 = (1-f0) * f_rem_1 
     norm = f_adj_0 + f_adj_1 
@@ -574,91 +526,31 @@ def cdf_2state_levy_flight_alt(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
         cf0 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D0, f*frame_interval, loc_error)
         cf1 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D1, f*frame_interval, loc_error)
 
-        # Transform to real space 
-        pdf0 = -real_support[:5001] * np.fft.irfft(cf0, n=real_support.shape[0])[:5001]
-        pdf1 = -real_support[:5001] * np.fft.irfft(cf1, n=real_support.shape[0])[:5001]
+        # Transform to real space (taking bins up to 20.0 um)
+        pdf0 = -real_support[:20001] * np.fft.irfft(cf0, n=real_support.shape[0])[:20001]
+        pdf1 = -real_support[:20001] * np.fft.irfft(cf1, n=real_support.shape[0])[:20001]
 
         # Linearly interpolate the center of each bin
         pdf0 = 0.5 * (pdf0[1:] + pdf0[:-1])
         pdf1 = 0.5 * (pdf1[1:] + pdf1[:-1])
 
-        # Project into 2D
-        pdf0 = proj @ pdf0
-        pdf1 = proj @ pdf1
+        # Aggregate the 1 nm bins into 4 nm bins
+        pdf0 = pdf0[0::4] + pdf0[1::4] + pdf0[2::4] + pdf0[3::4]
+        pdf1 = pdf1[0::4] + pdf1[1::4] + pdf1[2::4] + pdf1[3::4]
 
         # Normalize
         pdf0 /= pdf0.sum()
-        pdf1 /= pdf1.sum()
-
-        # Combine the CDFs
-        result[match] = f_adj_0[f-1] * np.cumsum(pdf0) + (1 - f_adj_0[f-1]) * np.cumsum(pdf1)
-
-    return result    
-
-
-def pdf_2state_levy_flight_alt(rt_tuples, alpha, f0, D0, D1, loc_error, dz=None,
-    frame_interval=0.01, **kwargs):
-    # Global real/frequency domain binning schemes
-    global freq_support
-    global real_support
-
-    # Get the projection matrix for this focal depth
-    proj = get_proj_matrix(dz)
-
-    # Identify the unique frame intervals at which to evaluate the PDF
-    unique_times = np.unique(rt_tuples[:,1])
-
-    # Assign each observation to a frame interval
-    frames = (rt_tuples[:,1] / frame_interval).round(0).astype(np.int64)
-    n_frames = frames.max()
-    unique_frames = np.arange(1, n_frames+1)
-
-    # Evaluate the defocalization function for each diffusing state
-    if dz is None:
-        f_rem_0 = np.ones(len(unique_times))
-        f_rem_1 = np.ones(len(unique_times))
-    else:
-        f_rem_0 = defoc_prob_levy(D0, alpha, n_frames, frame_interval, dz)
-        f_rem_1 = defoc_prob_levy(D1, alpha, n_frames, frame_interval, dz)
-
-    # Adjusted state occupations
-    f_adj_0 = f0 * f_rem_0 
-    f_adj_1 = (1-f0) * f_rem_1 
-    norm = f_adj_0 + f_adj_1 
-    f_adj_0 = f_adj_0 / norm 
-
-    # Synthesize the mixed state PDF for each frame interval
-    result = np.zeros(rt_tuples.shape[0], dtype=np.float64)
-    for f in unique_frames:
-
-        # The set of observations corresponding to this frame interval
-        match = frames == f
-
-        # Evaluate the characteristic functions for each state
-        cf0 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D0, f*frame_interval, loc_error)
-        cf1 = 1.0j * freq_support * levy_flight_cf(freq_support, alpha, D1, f*frame_interval, loc_error)
-
-        # Transform to real space 
-        pdf0 = -real_support[:5001] * np.fft.irfft(cf0, n=real_support.shape[0])[:5001]
-        pdf1 = -real_support[:5001] * np.fft.irfft(cf1, n=real_support.shape[0])[:5001]
-
-        # Linearly interpolate the center of each bin
-        pdf0 = 0.5 * (pdf0[1:] + pdf0[:-1])
-        pdf1 = 0.5 * (pdf1[1:] + pdf1[:-1])
+        pdf1 /= pdf1.sum()       
 
         # Project into 2D
-        pdf0 = proj @ pdf0
-        pdf1 = proj @ pdf1
+        pdf0 = (proj @ pdf0)[:1250]
+        pdf1 = (proj @ pdf1)[:1250]
 
-        # Normalize
-        pdf0 /= pdf0.sum()
-        pdf1 /= pdf1.sum()
+        # Combine the PDFs and renormalize
+        pdf_comb = f_adj_0[f-1] * (pdf0/pdf0.sum()) + (1 - f_adj_0[f-1]) * (pdf1/pdf1.sum())
+        result[match] = pdf_comb / pdf_comb.sum()
 
-        # Combine the PDFs
-        pdf = f_adj_0[f-1] * pdf0 + (1 - f_adj_0[f-1]) * pdf1
-        result[match] = pdf / pdf.sum()
-
-    return result    
+    return result
 
 def cdf_1state_levy_flight_hankel(rt_tuples, alpha, D, loc_error, **kwargs):
     """
@@ -1400,7 +1292,7 @@ def pdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
 CDF_MODELS = {
     "one_state_brownian": cdf_1state_brownian,
     "one_state_fbm": cdf_1state_fbm,
-    "one_state_levy": cdf_1state_levy_flight,
+    "one_state_levy_flight": cdf_1state_levy_flight,
     "one_state_levy_hankel": cdf_1state_levy_flight_hankel,
     "two_state_brownian": cdf_2state_brownian_uncorr,
     "two_state_brownian_zcorr": cdf_2state_brownian_zcorr,
@@ -1415,7 +1307,7 @@ CDF_MODELS = {
 PDF_MODELS = {
     "one_state_brownian": pdf_1state_brownian,
     "one_state_fbm": pdf_1state_fbm,
-    "one_state_levy": pdf_1state_levy_flight,
+    "one_state_levy_flight": pdf_1state_levy_flight,
     "one_state_levy_hankel": pdf_1state_levy_flight_hankel,
     "two_state_brownian": pdf_2state_brownian_uncorr,
     "two_state_brownian_zcorr": pdf_2state_brownian_zcorr,
@@ -1430,7 +1322,7 @@ PDF_MODELS = {
 MODEL_PARS = {
     "one_state_brownian": ["D", "loc_error"],
     "one_state_fbm": ["hurst", "D", "loc_error"],
-    "one_state_levy": ["alpha", "D", "loc_error"],
+    "one_state_levy_flight": ["alpha", "D", "loc_error"],
     "one_state_levy_hankel": ["alpha", "scale", "loc_error"],
     "two_state_brownian": ["f0", "D0", "D1", "loc_error"],
     "two_state_brownian_zcorr": ["f0", "D0", "D1", "loc_error"],
@@ -1454,7 +1346,7 @@ MODEL_PAR_BOUNDS = {
         np.array([1.0e-8, 1.0e-8, 0.0]),
         np.array([1.0, np.inf, 0.1])
     ),
-    "one_state_levy": (
+    "one_state_levy_flight": (
         np.array([1.0, 1.0e-8, 0.0]),
         np.array([2.0, np.inf, 0.1])
     ),
@@ -1496,7 +1388,7 @@ MODEL_PAR_BOUNDS = {
 MODEL_GUESS = {
     "one_state_brownian": np.array([1.0, 0.035]),
     "one_state_fbm": np.array([0.5, 1.0, 0.035]),
-    "one_state_levy": np.array([2.0, 1.0, 0.035]),
+    "one_state_levy_flight": np.array([2.0, 1.0, 0.035]),
     "one_state_levy_hankel": np.array([2.0, 1.0, 0.035]),
     "two_state_brownian": np.array([0.3, 0.01, 1.0, 0.035]),
     "two_state_brownian_zcorr": np.array([0.3, 0.001, 1.0, 0.035]),
