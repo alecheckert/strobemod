@@ -1007,7 +1007,7 @@ def pdf_3state_brownian_uncorr(rt_tuples, f0, f1, D0, D1, D2, loc_error, **kwarg
     return f0*pdf_0 + f1*pdf_1 + (1-f0-f1)*pdf_2
 
 def cdf_2state_brownian_zcorr(rt_tuples, f0, D0, D1, loc_error,
-    dz=0.7, frame_interval=0.01, **kwargs):
+    dz=0.7, frame_interval=0.01, n_gaps=0, **kwargs):
     """
     Distribution function for the 2D radial displacements of a two-state
     Brownian motion with no state transitions. In this model, state 
@@ -1028,6 +1028,7 @@ def cdf_2state_brownian_zcorr(rt_tuples, f0, D0, D1, loc_error,
         loc_error       :   float, 1D localization error in um
         dz              :   float, the depth of the focal plane in um
         frame_interval  :   float, seconds
+        n_gaps          :   int, the number of gaps allowed during tracking
 
     returns
     -------
@@ -1051,7 +1052,7 @@ def cdf_2state_brownian_zcorr(rt_tuples, f0, D0, D1, loc_error,
 
     # Get the fraction of molecules in the free state 
     # remaining at each frame, after defocalization
-    f_rem = defoc_prob_brownian(D1, n_frames, frame_interval, dz)
+    f_rem = defoc_prob_brownian(D1, n_frames, frame_interval, dz, n_gaps=n_gaps)
 
     # Use this correction to synthesize the combined CDF for both states
     result = np.empty(rt_tuples.shape[0], dtype=np.float64)
@@ -1072,7 +1073,7 @@ def cdf_2state_brownian_zcorr(rt_tuples, f0, D0, D1, loc_error,
     return result 
 
 def pdf_2state_brownian_zcorr(rt_tuples, f0, D0, D1, loc_error,
-    dz=0.7, frame_interval=0.01, **kwargs):
+    dz=0.7, frame_interval=0.01, n_gaps=0, **kwargs):
     """
     Probability density function for the 2D radial displacements of a two-state
     Brownian motion with no state transitions. In this model, state 
@@ -1093,6 +1094,7 @@ def pdf_2state_brownian_zcorr(rt_tuples, f0, D0, D1, loc_error,
         loc_error       :   float, 1D localization error in um
         dz              :   float, the depth of the focal plane in um
         frame_interval  :   float, seconds
+        n_gaps          :   int, the number of gaps allowed during tracking
 
     returns
     -------
@@ -1115,7 +1117,7 @@ def pdf_2state_brownian_zcorr(rt_tuples, f0, D0, D1, loc_error,
 
     # Given this diffusion coefficient and focal depth, get the expected
     # fraction of free molecules remaining at each time point
-    f_rem = defoc_prob_brownian(D1, n_frames, frame_interval, dz)
+    f_rem = defoc_prob_brownian(D1, n_frames, frame_interval, dz, n_gaps=n_gaps)
 
     # Use this correction to synthesize the PDF for both states
     result = np.empty(rt_tuples.shape[0], dtype=np.float64)
@@ -1136,7 +1138,7 @@ def pdf_2state_brownian_zcorr(rt_tuples, f0, D0, D1, loc_error,
     return result 
 
 def cdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
-    dz=0.7, frame_interval=0.01, **kwargs):
+    dz=0.7, frame_interval=0.01, n_gaps=0, **kwargs):
     """
     Distribution function for the 2D radial displacements of a three-state
     Brownian motion with no state transitions. In this model, state 
@@ -1160,6 +1162,8 @@ def cdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
         loc_error       :   float, 1D localization error in um
         dz              :   float, the depth of the focal plane in um
         frame_interval  :   float, seconds
+        n_gaps          :   int, the number of gap frames allowed during
+                            tracking
 
     returns
     -------
@@ -1185,8 +1189,8 @@ def cdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
 
     # Get the fraction of molecules in each free state 
     # remaining at each frame, after defocalization
-    f_rem_1 = defoc_prob_brownian(D1, n_frames, frame_interval, dz)
-    f_rem_2 = defoc_prob_brownian(D2, n_frames, frame_interval, dz)
+    f_rem_1 = defoc_prob_brownian(D1, n_frames, frame_interval, dz, n_gaps=n_gaps)
+    f_rem_2 = defoc_prob_brownian(D2, n_frames, frame_interval, dz, n_gaps=n_gaps)
 
     # Use this correction to synthesize the combined CDF for both states
     result = np.empty(rt_tuples.shape[0], dtype=np.float64)
@@ -1211,7 +1215,7 @@ def cdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
     return result    
 
 def pdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
-    dz=0.7, frame_interval=0.01, **kwargs):
+    dz=0.7, frame_interval=0.01, n_gaps=0, **kwargs):
     """
     Probability density function for the 2D radial displacements of a three-state
     Brownian motion with no state transitions. In this model, state 
@@ -1235,6 +1239,8 @@ def pdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
         loc_error       :   float, 1D localization error in um
         dz              :   float, the depth of the focal plane in um
         frame_interval  :   float, seconds
+        n_gaps          :   int, the number of gap frames allowed during
+                            tracking
 
     returns
     -------
@@ -1259,8 +1265,8 @@ def pdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
 
     # Given this diffusion coefficient and focal depth, get the expected
     # fraction of free molecules remaining at each time point
-    f_rem_1 = defoc_prob_brownian(D1, n_frames, frame_interval, dz)
-    f_rem_2 = defoc_prob_brownian(D2, n_frames, frame_interval, dz)
+    f_rem_1 = defoc_prob_brownian(D1, n_frames, frame_interval, dz, n_gaps=n_gaps)
+    f_rem_2 = defoc_prob_brownian(D2, n_frames, frame_interval, dz, n_gaps=n_gaps)
 
     # Use this correction to synthesize the PDF for both states
     result = np.empty(rt_tuples.shape[0], dtype=np.float64)

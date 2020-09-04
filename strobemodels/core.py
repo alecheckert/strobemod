@@ -129,6 +129,7 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
     # Define the model functions to be fit
     kwargs = {
         "frame_interval": frame_interval,
+        "n_gaps": n_gaps,
         **model_kwargs 
     }
     model_cdf = lambda *args: CDF_MODELS[model](*args, **kwargs)
