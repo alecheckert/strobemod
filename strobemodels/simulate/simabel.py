@@ -57,7 +57,8 @@ n_bins = r_edges.shape[0] - 1
 bin_size = r_edges[1] - r_edges[0]
 r_c = r_edges[:-1] + bin_size * 0.5
 
-def radprojsim_bin(B0, B1, n_samples=1000000, n_iter=1, dz=None):
+def radprojsim_bin(B0, B1, n_samples=1000000, n_iter=1, dz=None,
+    gaussian_sigma=None):
     """
     Given a 3D radial displacement R such that R in [B0, B1] and 
     R is uniformly distributed in the available 3D Euclidean space,
@@ -79,6 +80,14 @@ def radprojsim_bin(B0, B1, n_samples=1000000, n_iter=1, dz=None):
                         such constraint is imposed. Note that the total 
                         probability across all bins will generally not 
                         sum to 1 if *dz* is set.
+        gaussian_sigma: If *dz* is set, this determines the detection
+                        profile in *z*. If *None*, then the particles are
+                        given starting positions in *z* that are uniformly
+                        distributed between -dz/2 and +dz/2. If set to a
+                        float, then the particles are given starting
+                        positions that are distributed in *z* according to
+                        a normal distribution with sigma *gaussian_sigma*
+                        centered on z = 0.
 
     returns
     -------
@@ -93,7 +102,9 @@ def radprojsim_bin(B0, B1, n_samples=1000000, n_iter=1, dz=None):
 
     for iter_idx in range(n_iter):
 
-        # Simulate the radial displacements using inverse CDF sampling
+        # Simulate the radial displacements using inverse CDF sampling.
+        # These are selected with uniform probability from a thin spherical
+        # shell
         r = np.cbrt(B0**3 + (B1**3 - B0**3) * np.random.random(size=n_samples))
 
         # Simulate angular displacements by sampling on the surface of 
@@ -107,8 +118,21 @@ def radprojsim_bin(B0, B1, n_samples=1000000, n_iter=1, dz=None):
         # If desired, simulate a finite range of observation in z
         if not dz is None:
             hz = dz * 0.5
-            a[:,0] = a[:,0] + np.random.uniform(-hz, hz, size=n_samples)
-            a = a[np.abs(a[:,0])<=hz, :]
+
+            # Uniform probability of detection in *z*
+            if gaussian_sigma is None:
+                a[:,0] = a[:,0] + np.random.uniform(-hz, hz, size=n_samples)
+                a = a[np.abs(a[:,0])<=hz, :]
+
+            # Gaussian probability of detection in *z*
+            else:
+                start = np.random.normal(scale=gaussian_sigma, size=n_samples)
+                outside = np.abs(start) > hz
+                while outside.any():
+                    start[outside] = np.random.normal(
+                        scale=gaussian_sigma, size=outside.sum())
+                    outside = np.abs(start) > hz
+                a[:,0] = a[:,0] + start
 
         # Take the XY displacements 
         r = np.sqrt((a[:,1:]**2).sum(axis=1))
@@ -119,7 +143,7 @@ def radprojsim_bin(B0, B1, n_samples=1000000, n_iter=1, dz=None):
     return result 
 
 def radprojsim(n_samples=10000000, n_iter=10, num_workers=8, out_csv=None,
-    dz=None):
+    dz=None, gaussian_sigma=None):
     """
     Combine the full numerical approximative Abel transform. For each 
     bin in the global bin scheme, compute the corresponding distribution
@@ -132,6 +156,8 @@ def radprojsim(n_samples=10000000, n_iter=10, num_workers=8, out_csv=None,
         num_workers :   int, number of dask workers to use in this job
         out_csv     :   str, file to save the projection to
         dz          :   float, axial containment range
+        gaussian_sigma: float, sigma for the starting position in *z*,
+                        if using *dz*
 
     returns
     -------
@@ -148,7 +174,8 @@ def radprojsim(n_samples=10000000, n_iter=10, num_workers=8, out_csv=None,
     @dask.delayed 
     def simulate_bin(i):
         result = radprojsim_bin(r_edges[i], r_edges[i+1], 
-            n_samples=n_samples, n_iter=n_iter, dz=dz)
+            n_samples=n_samples, n_iter=n_iter, dz=dz, 
+            gaussian_sigma=gaussian_sigma)
         return result 
 
     results = [simulate_bin(i) for i in range(n_bins)]
@@ -177,8 +204,8 @@ def radprojsim(n_samples=10000000, n_iter=10, num_workers=8, out_csv=None,
 
 if __name__ == '__main__':
     result = radprojsim(n_samples=1000000, n_iter=10,
-        num_workers=1, dz=0.6,
-        out_csv="abel_transform_dz-0.6um_20um.csv")
+        num_workers=1, dz=0.7, gaussian_sigma=0.285,
+        out_csv="abel_transform_dz-0.7um_range-20um_profile-gauss-0.285um.csv")
     plt.imshow(result, vmax=result.max()*0.05, cmap='gray')
     plt.show(); plt.close()
 
