@@ -1070,11 +1070,11 @@ def get_proj_matrix(dz=None):
 
     """
     if dz is None:
-        proj_file = os.path.join(DATA_DIR, "free_abel_transform_20um.csv")
+        proj_file = os.path.join(DATA_DIR, "free_abel_transform_range-20um.csv")
     else:
         options = np.array([0.7])
         dz_close = options[np.argmin(np.abs(options - dz))]
-        proj_file = os.path.join(DATA_DIR, "abel_transform_dz-%.1fum_20um.csv" % dz_close)
+        proj_file = os.path.join(DATA_DIR, "abel_transform_dz-%.1fum_range-20um_uniform.csv" % dz_close)
     P = np.array(pd.read_csv(proj_file).drop("r_right_edge_um", axis=1))
     return P 
 

@@ -16,7 +16,8 @@ targets = [
     os.path.join(DATA_DIR, "abel_transform_dz-0.5um.zip"),
     os.path.join(DATA_DIR, "abel_transform_dz-0.6um.zip"),
     os.path.join(DATA_DIR, "abel_transform_dz-0.7um.zip"),
-    os.path.join(DATA_DIR, "free_abel_transform.zip")
+    os.path.join(DATA_DIR, "free_abel_transform.zip"),
+    os.path.join(DATA_DIR, "abel_transforms_range-20um.zip")
 ]
 for t in targets:
   print("unzipping {}...".format(t))
