@@ -304,6 +304,9 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
         )
 
     """
+    # Sort by trajectory, then frame
+    tracks = tracks.sort_values(by=["trajectory", "frame"])
+
     # Assign track lengths
     if "track_length" not in tracks.columns:
         tracks = track_length(tracks)
@@ -323,7 +326,7 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
     T.loc[T["index_in_track"]==1, "first_in_track"] = 1
 
     # Convert to ndarray for speed
-    T = np.asarray(T[["frame", "trajectory", "y", "x", "first_in_track"]])
+    T = np.asarray(T[["frame", "trajectory", "y", "x", "first_in_track"]]).astype(np.float64)
 
     # Sort first by track, then by frame
     T = T[np.lexsort((T[:,0], T[:,1])), :]
