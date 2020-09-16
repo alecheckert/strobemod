@@ -559,6 +559,9 @@ def defoc_prob_brownian(D, n_frames, frame_interval, dz, n_gaps=0):
             remains in the focal volume at the end of each frame
 
     """
+    if dz is np.inf:
+        return np.ones(n_frames, dtype=np.float64)
+
     if n_gaps > 0:
         return defoc_prob_brownian_gapped(D, n_frames, frame_interval, dz, n_gaps=n_gaps)
 
@@ -603,6 +606,9 @@ def defoc_prob_brownian_gapped(D, n_frames, frame_interval, dz, n_gaps=0):
             remains in the focal volume at the end of each frame       
 
     """
+    if dz is np.inf:
+        return np.ones(n_frames, dtype=np.float64)
+
     # z-axis support
     s = (int(dz//2.0)+1) * 2
     support = np.linspace(-s, s, int(((2*s)//0.001)+2))[:-1]
@@ -677,6 +683,9 @@ def defoc_prob_levy(D, alpha, n_frames, frame_interval, dz, n_gaps=0):
             remains in the focal volume at the end of each frame
 
     """
+    if dz is np.inf:
+        return np.ones(n_frames, dtype=np.float64)
+
     if n_gaps > 0:
         return defoc_prob_levy_gapped(D, alpha, n_frames, frame_interval,
             dz, n_gaps=n_gaps)
@@ -726,6 +735,9 @@ def defoc_prob_levy_gapped(D, alpha, n_frames, frame_interval, dz, n_gaps=0):
             remains in the focal volume at the end of each frame
 
     """
+    if dz is np.inf:
+        return np.ones(n_frames, dtype=np.float64)
+
     # z-axis support
     s = (int(dz//2.0)+1) * 2
     support = np.linspace(-s, s, int(((2*s)//0.001)+2))[:-1]
@@ -794,6 +806,9 @@ def defoc_prob_fbm(D, hurst, n_frames, frame_interval, dz):
             of FBMs remaining in the slice at each of the frame intervals
 
     """
+    if dz is np.inf:
+        return np.ones(n_frames, dtype=np.float64)
+        
     if n_frames > 8:
         raise RuntimeError("strobemodels.utils.defoc_prob_fbm: no more than " \
             "8 frame intervals supported for FBM fitting")

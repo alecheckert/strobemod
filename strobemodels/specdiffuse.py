@@ -15,7 +15,10 @@ import pandas as pd
 
 # Defocalization probability of a Brownian motion 
 # in a thin plane
-from strobemodels.utils import defoc_prob_brownian
+from .utils import defoc_prob_brownian
+
+# Model for regular one-state Brownian motion
+from .models import pdf_1state_brownian, cdf_1state_brownian
 
 def expect_max(data, likelihood, D_values, n_iter=1000, **kwargs):
     """
@@ -70,7 +73,8 @@ def expect_max(data, likelihood, D_values, n_iter=1000, **kwargs):
     print("")
     return p
 
-def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=0.01, dz=0.7):
+def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=0.01,
+    dz=0.7, loc_error=0.0):
     """
     Estimate the fraction of trajectories in each of a spectrum of diffusive states,
     accounting for defocalization over the experimental frame interval.
@@ -106,6 +110,7 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
         n_frames        :   int, the maximum number of frame intervals to consider
         frame_interval  :   float, the experimental frame interval in seconds
         dz              :   float, the thickness of the focal slice in um
+        loc_error       :   float, 1D localization error in um
 
     returns
     -------
@@ -176,7 +181,8 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
     # conditioned on knowledge of the underlying state
     L_cond = np.zeros((vecs.shape[0], nD), dtype=np.float64)
     for j, D in enumerate(D_values):
-        L_cond[:,j] = vecs[:,5] * np.exp(-(vecs[:,5]**2) / (4 * D * frame_interval)) / (2 * D * frame_interval)
+        sig2 = 2 * (D * frame_interval + loc_error**2)
+        L_cond[:,j] = vecs[:,5] * np.exp(-(vecs[:,5]**2) / (2 * sig2)) / sig2
 
     # Evaluate the conditional probability of each trajectory under each of the diffusion
     # models. The following nonsense, which seems like a rather roundabout way of doing 
@@ -225,3 +231,118 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
     print("")
     return p 
 
+def pdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0.7,
+    loc_error=0.0):
+    """
+    Evaluate the probability density function for a mixed Brownian model with
+    any number of non-interconverting states, accounting for defocalization.
+
+    args
+    ----
+        rt_tuples           :   2D ndarray of shape (N, 2), the set of (radial displacement
+                                in um, delay in seconds) tuples at which to evaluate the PDF
+        D_values            :   1D ndarray of shape (M,), the set of diffusivities
+        D_occs              :   1D ndarray of shape (M,), the set of state occupations
+        frame_interval      :   float, time between frames in seconds
+        dz                  :   float, the thickness of the observation slice in um
+        loc_error           :   float, 1D localization error in um
+
+    returns
+    -------
+        1D ndarray of shape (N,), the PDF evaluated at each point of the support
+
+    """
+    N = rt_tuples.shape[0]
+    M = len(D_values)
+
+    # Get the unique time intervals present in this set of data
+    unique_dt = np.unique(rt_tuples[:,1])
+    n_frames = len(unique_dt)
+
+    # Evaluate the defocalization probabilities for each diffusive state
+    F_remain = np.zeros((M, n_frames), dtype=np.float64)
+    for i, D in enumerate(D_values):
+        F_remain[i,:] = defoc_prob_brownian(D, n_frames, frame_interval,
+            dz, n_gaps=0)
+
+    # Multiply by the state occupation estimates
+    F_remain = (F_remain.T * D_occs).T 
+
+    # Normalize on each frame interval
+    F_remain = F_remain / F_remain.sum(axis=0)
+
+    # Evaluate the PDFs for each state
+    pdfs = np.zeros(N, dtype=np.float64)
+    r2 = rt_tuples[:,0] ** 2
+    for i, D in enumerate(D_values):
+
+        pdf_D = np.zeros(N, dtype=np.float64)
+
+        for j, dt in enumerate(unique_dt):
+
+            # Evaluate the naive PDF for this diffusivity
+            match = rt_tuples[:,1] == dt 
+            sig2 = 2 * (D * dt + loc_error**2)
+            pdf_D[match] = rt_tuples[match, 0] * np.exp(-r2[match] / (2 * sig2)) / sig2 
+            pdf_D[match] = pdf_D[match] * F_remain[i,j]
+
+        pdfs += pdf_D 
+
+    return pdfs 
+
+def cdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0.7,
+    loc_error=0.0):
+    """
+    Evaluate the cumulative distribution function for a mixed Brownian model
+    with any number of non-interconverting states, accounting for defocalization.
+
+    args
+    ----
+        rt_tuples           :   2D ndarray of shape (N, 2), the set of (radial displacement
+                                in um, delay in seconds) tuples at which to evaluate the PDF
+        D_values            :   1D ndarray of shape (M,), the set of diffusivities
+        D_occs              :   1D ndarray of shape (M,), the set of state occupations
+        frame_interval      :   float, time between frames in seconds
+        dz                  :   float, the thickness of the observation slice in um
+        loc_error           :   float, 1D localization error in um
+
+    returns
+    -------
+        1D ndarray of shape (N,), the PDF evaluated at each point of the support
+
+    """
+    N = rt_tuples.shape[0]
+    M = len(D_values)
+
+    # Get the unique time intervals present in this set of data
+    unique_dt = np.unique(rt_tuples[:,1])
+    n_frames = len(unique_dt)
+
+    # Evaluate the defocalization probabilities for each diffusive state
+    F_remain = np.zeros((M, n_frames), dtype=np.float64)
+    for i, D in enumerate(D_values):
+        F_remain[i,:] = defoc_prob_brownian(D, n_frames, frame_interval,
+            dz, n_gaps=0)
+
+    # Multiply by the state occupation estimates
+    F_remain = (F_remain.T * D_occs).T 
+
+    # Normalize on each frame interval
+    F_remain = F_remain / F_remain.sum(axis=0)
+
+    # Evaluate the CDFs for each state
+    cdfs = np.zeros(N, dtype=np.float64)
+    r2 = rt_tuples[:,0] ** 2
+    for i, D in enumerate(D_values):
+
+        cdf_D = np.zeros(N, dtype=np.float64)
+
+        for j, dt in enumerate(unique_dt):
+            sig2 = 2 * (D * dt + loc_error**2)
+            match = rt_tuples[:,1] == dt 
+            cdf_D[match] = 1.0 - np.exp(-r2[match] / (2 * sig2))
+            cdf_D[match] = cdf_D[match] * F_remain[i,j]
+
+        cdfs += cdf_D 
+
+    return cdfs 
