@@ -187,6 +187,38 @@ def track_length(tracks):
         on="trajectory"
     )
 
+def track_array(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16):
+    """
+    Convert a set of trajectories from pandas.DataFrame format into a specific
+    list format [T1, T2, ...] where each Ti is a trajectory, represented as a 
+    2D ndarray of shape (traj_length, 3) with the column identities (y, x, t).
+
+    As a result, the result of this function can be indexed the following way:
+
+        result[track_index][0, 0] -> y-coordinate of the first point in this
+                                     trajectory
+        result[track_index][1, 2] -> timepoint (in seconds) of the second point
+                                     in this trajectory
+        result[track_index][0, 1] -> x-coordinate of the first point in this
+                                     trajectory
+
+    and so on.
+
+    args
+    ----
+        tracks          :   pandas.DataFrame, trajectories in standard format
+        n_frames        :   int, the maximum number of frame intervals to 
+                            consider
+        frame_interval  :   float, the time between frames in seconds
+        pixel_size_um   :   float, the size of individual pixels in um
+
+    returns
+    -------
+        list of 2D ndarray, the trajectories
+
+    """
+    raise NotImplementedError
+
 def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16, first_only=True):
     """
     Calculate all of the radial displacements in the XY plane for a set of
@@ -256,7 +288,7 @@ def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16, fir
         # Only consider vectors between points originating in the same track
         diff = diff[diff[:,1] == 0.0, :]
 
-        # Only consider vectorss that match the delay being considered
+        # Only consider vectors that match the delay being considered
         diff = diff[diff[:,0] == t, :]
 
         # Only consider vectors relative to the first localization in that track
