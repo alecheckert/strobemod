@@ -115,6 +115,61 @@ def strobe_infinite_plane(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_ou
     else:
         return tracks 
 
+def strobe_multistate_infinite_plane(model, n_tracks, model_diffusivities,
+    model_occupations, track_len=10, dz=0.7, frame_interval=0.01, loc_error=0.0,
+    exclude_outside=True, n_gaps=0, return_dataframe=True, **model_kwargs):
+    """
+    Simulate a mixture of non-interconverting diffusive states. If the 
+    diffusion models have underlying special parameters (for instance, the
+    stability parameter for Levy flights, or the Hurst parameter for FBMs),
+    then these are assumed to be the same for each component of the mixture.
+    Only the diffusivity (scale parameter for Levy flights) is assumed to be
+    different.
+
+    args
+    ----
+        model               :   str, either "brownian", "fbm", or "levy"
+        n_tracks            :   int, the number of trajectories to simulate
+        model_diffusivities :   1D ndarray, the diffusivities of each 
+                                component in the mixture in um^2 s^-1
+        model_occupations   :   1D ndarray, the fractional occupations of
+                                each component in the mixture 
+        track_len           :   int, the maximum length of trajectories to 
+                                simulate
+        dz                  :   float, the thickness of the focal depth in um
+        frame_interval      :   float, time between frames in seconds
+        loc_error           ;   float, 1D localization error in um
+        exclude_outside     :   bool, drop trajectories once they leave the
+                                focal volume 
+        n_gaps              :   int, the number of gap frames tolerated before
+                                dropping a trajectory
+        model_kwargs        ;   additional keyword arguments and special parameters
+                                for the underlying diffusion model
+
+    returns
+    -------
+        pandas.DataFrame, the resulting trajectories
+
+    """
+    # Choose the number of trajectories in each diffusive state
+    n_occ = np.random.multinomial(n_tracks, model_occupations)
+
+    # Simulate the states
+    tracks = []
+    for i, D in enumerate(model_diffusivities):
+        model_obj = DIFFUSION_MODELS[model](dt=frame_interval, track_len=track_len, **model_kwargs)
+        tracks_state = strobe_infinite_plane(model_obj, n_occ[i], dz=dz, loc_error=loc_error,
+            exclude_outside=exclude_outside, n_gaps=n_gaps, return_dataframe=return_dataframe)
+        tracks.append(tracks_state)
+
+    # Concatenate trajectories from both states
+    if isinstance(tracks[0], pd.DataFrame):
+        tracks = concat_tracks(*tracks)
+    else:
+        tracks = np.concatenate(tracks, axis=0)
+
+    return tracks 
+
 def strobe_one_state_infinite_plane(model, n_tracks, track_len=10, dz=0.7, dt=0.01,
     loc_error=0.0, exclude_outside=True, n_gaps=0, return_dataframe=True, **model_kwargs):
     """
