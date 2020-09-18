@@ -28,7 +28,7 @@ from .utils import (
     assign_index_in_track
 )
 
-def expect_max(data, likelihood, D_values, n_iter=1000, **kwargs):
+def expect_max(data, likelihood, diffusivities, n_iter=1000, **kwargs):
     """
     Use expectation-maximization algorithm to estimate the state occupations
     for a mixture model, given a set of observed jumps.
@@ -40,25 +40,25 @@ def expect_max(data, likelihood, D_values, n_iter=1000, **kwargs):
         likelihood  :   function with signature (data, D, **kwargs), the 
                         likelihood function for jumps produced by the diffusion
                         model
-        D_values    :   1D ndarray, the set of diffusivities to consider
+        diffusivities:   1D ndarray, the set of diffusivities to consider
         n_iter      :   int, the number of iterations
         kwargs      :   additional keyword arguments to the likelihood
 
     returns
     -------
-        1D ndarray of shape D_values.shape, the estimated occupations for 
+        1D ndarray of shape diffusivities.shape, the estimated occupations for 
             each diffusive state
 
     """
     M = data.shape[0]
-    nD = len(D_values)
+    nD = len(diffusivities)
 
     # Current guess for the state occupations
     p = np.ones(nD, dtype=np.float64) / nD 
 
     # The likelihood of each observation given each diffusion coefficient
     L = np.zeros((M, nD), dtype=np.float64)
-    for i, D in enumerate(D_values):
+    for i, D in enumerate(diffusivities):
         L[:,i] = likelihood(data, D, **kwargs)
 
     # The probabilities of each diffusive state, given each observation
@@ -221,18 +221,19 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
 
     return L 
 
-def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=0.01,
+def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
     dz=0.7, loc_error=0.0, pixel_size_um=1.0, verbose=True, save_track_diffusivities=False):
     """
     Estimate the fraction of trajectories in each of a spectrum of diffusive states,
-    accounting for defocalization over the experimental frame interval.
+    accounting for defocalization over the experimental frame interval, using an
+    expectation-maximization algorithm.
 
     The result is a vector with the predicted occupations of each state.
 
     note on choice of diffusivities
     -------------------------------
         This algorithm estimates the occupation of each diffusive state rather than
-        the corresponding diffusivity, so the vector of diffusivities (*D_values*) 
+        the corresponding diffusivity, so the vector of diffusivities (*diffusivities*) 
         should be chosen with values that encompasses the range of diffusivities that
         are reasonably expected for this experiment. For instance, a biological 
         molecule might merit diffusivites ranging from 0.0 to 10.0 um^2 s^-1, with 
@@ -252,7 +253,7 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
     ----
         tracks          :   pandas.DataFrame, the trajectories. Must contain "y", "x",
                             "frame" (int), and "trajectory" columns
-        D_values        :   1D ndarray, the set of diffusivities to consider in um^2 
+        diffusivities   :   1D ndarray, the set of diffusivities to consider in um^2 
                             s^-1
         n_iter          :   int, the number of iterations
         n_frames        :   int, the maximum number of frame intervals to consider
@@ -266,62 +267,21 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
 
     returns
     -------
-        1D ndarray of shape D_values.shape, the estimated occupations of each 
+        1D ndarray of shape diffusivities.shape, the estimated occupations of each 
             diffusive state
 
     """
-    nD = len(D_values)
+    diffusivities = np.asarray(diffusivities)
+    nD = diffusivities.shape[0]
 
-    # Work with a copy of the trajectories rather than the original
-    tracks = tracks.copy()
-
-    # Convert from pixels to um
-    tracks[['y', 'x']] = tracks[['y', 'x']] * pixel_size_um
-
-    # Throw out all points in the trajectories after the first *n_frames*
-    tracks["one"] = 1
-    tracks["index_in_track"] = tracks.groupby("trajectory")["one"].cumsum() - 1
-    tracks = tracks.drop("one", axis=1)
-    tracks = tracks[tracks["index_in_track"] <= n_frames]
-
-    # Calculate trajectory length, then exclude singlets and non-trajectories from
-    # the analysis
-    tracks = tracks.join(
-        tracks.groupby("trajectory").size().rename("track_length"),
-        on="trajectory"
-    )
-    tracks = tracks[np.logical_and(tracks["track_length"]>1, tracks["trajectory"]>=0)]
-    tracks = tracks.sort_values(by=["trajectory", "frame"])
-    n_tracks = tracks['trajectory'].nunique()
-
-    if verbose:
-        print("Total trajectories: {}".format(n_tracks))
-
-    # Work with an ndarray copy, for speed. Note that the last two columns
-    # are placeholders.
-    _T = np.asarray(tracks[['track_length', 'trajectory', 'y', 'x', 'track_length', 'track_length']])
-
-    # Calculate the YX displacement vectors
-    vecs = _T[1:,:] - _T[:-1,:]
-
-    # Map the corresponding trajectory indices back to each displacement. 
-    # This is defined as the trajectory index corresponding to the first 
-    # point that makes up each displacement
-    vecs[:,4] = _T[:-1,1]
-
-    # Map the corresponding track lengths back to each displacement
-    vecs[:,0] = _T[:-1,0]
-
-    # Only consider vectors between points originating from the same track
-    vecs = vecs[vecs[:,1] == 0.0, :]
-
-    # Calculate the corresponding 2D radial displacements
-    vecs[:,5] = np.sqrt(vecs[:,2]**2 + vecs[:,3]**2)
+    # Calculate the squared 2D radial displacements
+    vecs, n_tracks = rad_disp_squared(tracks, start_frame=None, n_frames=n_frames,
+        pixel_size_um=pixel_size_um)
 
     # Get the probability of remaining in the focal volume for each 
     # diffusive state at each of the frame intervals under consideration
     F_remain = np.zeros((n_frames, nD), dtype=np.float64)
-    for j, D in enumerate(D_values):
+    for j, D in enumerate(diffusivities):
         F_remain[:,j] = defoc_prob_brownian(D, n_frames, frame_interval=frame_interval,
             dz=dz, n_gaps=0)
     f_remain_one_interval = F_remain[0,:].copy()
@@ -334,30 +294,11 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
     # Normalize
     F_remain = F_remain / F_remain.sum(axis=0)
 
-    # Evaluate the probability density at each jump, given each diffusion
-    # coefficient. Each element of this is like the PDF for the displacement
-    # conditioned on knowledge of the underlying state
-    L_cond = np.zeros((vecs.shape[0], nD), dtype=np.float64)
-    for j, D in enumerate(D_values):
-        sig2 = 2 * (D * frame_interval + loc_error**2)
-        L_cond[:,j] = vecs[:,5] * np.exp(-(vecs[:,5]**2) / (2 * sig2)) / sig2
-
-    # Evaluate the conditional probability of each trajectory under each of the diffusion
-    # models. The following nonsense, which seems like a rather roundabout way of doing 
-    # things, is really just to speed up this computation by relying on the fast numpy/pandas
-    # routines. The essential idea is: for every trajectory, evaluate its probability under
-    # a given diffusion coef. by multiplying (probability of observing a trajectory of this length)
-    # by (probability to observe this specific trajectory, given that length). The latter 
-    # conditional probability is just the product of the probability of each of the jump lengths
-    # under the diffusion model, since Brownian diffusion is Markovian.
-    L_cond = pd.DataFrame(L_cond, columns=D_values)
-    L_cond["trajectory"] = vecs[:,4]
-    L_cond["track_length"] = vecs[:,0].astype(np.int64)
-
-    L = np.zeros((n_tracks, nD), dtype=np.float64)
-    for j, D in enumerate(D_values):
-        L_cond["f_remain"] = L_cond["track_length"].map({i+2: F_remain[i,j] for i in range(n_frames)})
-        L[:,j] = np.asarray(L_cond.groupby("trajectory")[D].prod() * L_cond.groupby("trajectory")["f_remain"].first())
+    # Evaluate the likelihood of each diffusivity, given each trajectory. The
+    # result, *L[i,j]*, gives the likelihood to observe trajectory i under 
+    # diffusive state j
+    L = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
+        frame_interval=frame_interval, loc_error=loc_error, n_frames=n_frames)
 
     # The probabilities that each observation belongs to each diffusive state,
     # given the set of observations, their accompanying complete likelihood
@@ -389,14 +330,14 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
 
     # Save the diffusivity probability vectors for each trajectory
     if save_track_diffusivities:
-        out = pd.DataFrame(T, columns=D_values)
+        out = pd.DataFrame(T, columns=diffusivities.round(1))
         out["trajectory"] = np.asarray(L_cond.groupby("trajectory").apply(lambda i: i.name))
         out.to_csv("track_diffusivities.csv", index=False)
 
     if verbose: print("")
     return p 
 
-def pdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0.7,
+def pdf_specdiffuse_model(rt_tuples, diffusivities, D_occs, frame_interval=0.01, dz=0.7,
     loc_error=0.0):
     """
     Evaluate the probability density function for a mixed Brownian model with
@@ -406,7 +347,7 @@ def pdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
     ----
         rt_tuples           :   2D ndarray of shape (N, 2), the set of (radial displacement
                                 in um, delay in seconds) tuples at which to evaluate the PDF
-        D_values            :   1D ndarray of shape (M,), the set of diffusivities
+        diffusivities       :   1D ndarray of shape (M,), the set of diffusivities
         D_occs              :   1D ndarray of shape (M,), the set of state occupations
         frame_interval      :   float, time between frames in seconds
         dz                  :   float, the thickness of the observation slice in um
@@ -418,7 +359,7 @@ def pdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
 
     """
     N = rt_tuples.shape[0]
-    M = len(D_values)
+    M = len(diffuvisities)
 
     # Get the unique time intervals present in this set of data
     unique_dt = np.unique(rt_tuples[:,1])
@@ -426,7 +367,7 @@ def pdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
 
     # Evaluate the defocalization probabilities for each diffusive state
     F_remain = np.zeros((M, n_frames), dtype=np.float64)
-    for i, D in enumerate(D_values):
+    for i, D in enumerate(diffusivities):
         F_remain[i,:] = defoc_prob_brownian(D, n_frames, frame_interval,
             dz, n_gaps=0)
 
@@ -439,7 +380,7 @@ def pdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
     # Evaluate the PDFs for each state
     pdfs = np.zeros(N, dtype=np.float64)
     r2 = rt_tuples[:,0] ** 2
-    for i, D in enumerate(D_values):
+    for i, D in enumerate(diffusivities):
 
         pdf_D = np.zeros(N, dtype=np.float64)
 
@@ -455,7 +396,7 @@ def pdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
 
     return pdfs 
 
-def cdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0.7,
+def cdf_specdiffuse_model(rt_tuples, diffusivities, D_occs, frame_interval=0.01, dz=0.7,
     loc_error=0.0):
     """
     Evaluate the cumulative distribution function for a mixed Brownian model
@@ -465,7 +406,7 @@ def cdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
     ----
         rt_tuples           :   2D ndarray of shape (N, 2), the set of (radial displacement
                                 in um, delay in seconds) tuples at which to evaluate the PDF
-        D_values            :   1D ndarray of shape (M,), the set of diffusivities
+        diffusivities       :   1D ndarray of shape (M,), the set of diffusivities
         D_occs              :   1D ndarray of shape (M,), the set of state occupations
         frame_interval      :   float, time between frames in seconds
         dz                  :   float, the thickness of the observation slice in um
@@ -477,7 +418,7 @@ def cdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
 
     """
     N = rt_tuples.shape[0]
-    M = len(D_values)
+    M = len(diffusivities)
 
     # Get the unique time intervals present in this set of data
     unique_dt = np.unique(rt_tuples[:,1])
@@ -485,7 +426,7 @@ def cdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
 
     # Evaluate the defocalization probabilities for each diffusive state
     F_remain = np.zeros((M, n_frames), dtype=np.float64)
-    for i, D in enumerate(D_values):
+    for i, D in enumerate(diffusivities):
         F_remain[i,:] = defoc_prob_brownian(D, n_frames, frame_interval,
             dz, n_gaps=0)
 
@@ -498,7 +439,7 @@ def cdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
     # Evaluate the CDFs for each state
     cdfs = np.zeros(N, dtype=np.float64)
     r2 = rt_tuples[:,0] ** 2
-    for i, D in enumerate(D_values):
+    for i, D in enumerate(diffusivities):
 
         cdf_D = np.zeros(N, dtype=np.float64)
 
@@ -512,7 +453,7 @@ def cdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
 
     return cdfs 
 
-def gsdiff(tracks, D_values, prior=None, n_iter=1000, burnin=500,
+def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     n_frames=4, frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0,
     dz=np.inf, verbose=True, pseudocounts=1, n_threads=1):
     """
@@ -528,7 +469,7 @@ def gsdiff(tracks, D_values, prior=None, n_iter=1000, burnin=500,
                             a "frame" column with the frame index of 
                             each localization, and a "trajectory" column
                             with the index of the corresponding trajectory
-        D_values        :   1D ndarray of shape (K,), the set of diffusion
+        diffusivities   :   1D ndarray of shape (K,), the set of diffusion
                             coefficients, one for each state
         prior           :   1D ndarray of shape (K,), the prior over the 
                             state occupations. If *None*, we use a uniform
@@ -559,18 +500,18 @@ def gsdiff(tracks, D_values, prior=None, n_iter=1000, burnin=500,
             over state occupations
 
     """
-    D_values = np.asarray(D_values)
+    diffusivities = np.asarray(diffusivities)
 
     # The number of diffusing states
-    K = D_values.shape[0]
+    K = diffusivities.shape[0]
 
     # If no prior is specified, generate a uniform prior
     if prior is None:
         prior = np.ones(K, dtype=np.float64) * pseudocounts
     else:
         prior = np.asarray(prior)
-        assert prior.shape == D_values.shape, "prior must have the same " \
-            "number of diffusing states as D_values"
+        assert prior.shape == diffusivities.shape, "prior must have the same " \
+            "number of diffusing states as diffusivities"
 
     # Calculate squared radial displacements
     vecs, n_tracks = rad_disp_squared(tracks, start_frame=None, n_frames=n_frames,
@@ -582,7 +523,7 @@ def gsdiff(tracks, D_values, prior=None, n_iter=1000, burnin=500,
         f_remain_one_interval = np.ones(K, dtype=np.float64)
     else:
         F_remain = np.zeros((n_frames, K), dtype=np.float64)
-        for j, D in enumerate(D_values):
+        for j, D in enumerate(diffusivities):
             F_remain[:,j] = defoc_prob_brownian(D, n_frames, 
                 frame_interval=frame_interval, dz=dz, n_gaps=0)
         f_remain_one_interval = F_remain[0,:].copy()
@@ -593,7 +534,7 @@ def gsdiff(tracks, D_values, prior=None, n_iter=1000, burnin=500,
     # Evaluate the likelihood of each trajectory given each diffusive state.
     # The result, *L[i,j]*, gives the likelihood to observe trajectory i under
     # diffusive state j.
-    L = evaluate_diffusivity_likelihood(vecs, D_values, state_biases=F_remain,
+    L = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
         frame_interval=frame_interval, loc_error=loc_error, n_frames=n_frames)
 
     @dask.delayed
