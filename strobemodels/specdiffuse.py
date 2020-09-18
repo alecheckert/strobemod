@@ -13,12 +13,20 @@ import numpy as np
 # Dataframes
 import pandas as pd 
 
+# Parallelization
+import dask 
+
 # Defocalization probability of a Brownian motion 
 # in a thin plane
 from .utils import defoc_prob_brownian
 
 # Model for regular one-state Brownian motion
 from .models import pdf_1state_brownian, cdf_1state_brownian
+
+# Custom utilities
+from .utils import (
+    assign_index_in_track
+)
 
 def expect_max(data, likelihood, D_values, n_iter=1000, **kwargs):
     """
@@ -73,8 +81,148 @@ def expect_max(data, likelihood, D_values, n_iter=1000, **kwargs):
     print("")
     return p
 
+def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0):
+    """
+    Helper function for expectation-maximization and Gibbs sampling routines, used
+    to preprocess a set of trajectories for evaluation of likelihoods.
+
+    Given a set of trajectories, return the squared displacements of those trajectories
+    as an ndarray.
+
+    args
+    ----
+        tracks          :   pandas.DataFrame
+        start_frame     :   int, disregard trajectories before this frame
+        n_frames        :   int
+        pixel_size_um   :   float
+
+    returns
+    -------
+        (
+            vecs, a 2D ndarray of shape (N, 6), where *N* is the total number of 
+                displacements;
+            int, the number of trajectories considered
+        )
+
+        The columns of *vecs* have the following meaning:
+
+            vecs[:,0] -> number of displacements in the corresponding trajectory
+            vecs[:,1] -> difference in the trajectory index between the first and
+                         second points of each displacement. Should always be 0.
+            vecs[:,2] -> y-displacement in um
+            vecs[:,3] -> x-displacement in um
+            vecs[:,4] -> squared 2D radial displacement in um^2
+            vecs[:,5] -> index of the corresponding trajectory
+
+    """
+    # Do not modify the original dataframe
+    tracks = tracks.copy()
+
+    # Only consider trajectories after some start frame
+    if not start_frame is None:
+        tracks = tracks[tracks['frame'] >= start_frame]
+
+    # Convert from pixels to um
+    tracks[['y', 'x']] *= pixel_size_um 
+
+    # Throw out all points in each trajectory after the first *n_frames+1*,
+    # so that we have a maximum of *n_frames* displacements in the resulting
+    # set of trajectories
+    tracks = assign_index_in_track(tracks)
+    tracks = tracks[tracks["index_in_track"] <= n_frames].copy()
+
+    # Calculate trajectory length
+    tracks = tracks.join(
+        tracks.groupby("trajectory").size().rename("track_length"),
+        on="trajectory"
+    )
+
+    # Exclude singlets and non-trajectories from the analysis
+    tracks = tracks[np.logical_and(tracks["track_length"] > 1, tracks["trajectory"] >= 0)]
+    tracks = tracks.sort_values(by=["trajectory", "frame"])
+    n_tracks = tracks["trajectory"].nunique()
+
+    # Work with an ndarray copy, for speed. Note that the last two columns
+    # are placeholders, replaced by subsequent steps.
+    _T = np.asarray(tracks[['track_length', 'trajectory', 'y', 'x', 'track_length', 'track_length']])
+
+    # Calculate YX displacement vectors
+    vecs = _T[1:,:] - _T[:-1,:]
+
+    # Map the corresponding trajectory indices back to each displacement. 
+    # The trajectory index for a given displacement is defined as the trajectory
+    # corresponding to the first point that makes up the two-point displacement.
+    vecs[:,5] = _T[:-1,1]
+
+    # Map the corresponding track lengths back to each displacement
+    vecs[:,0] = _T[:-1,0]
+
+    # Only consider vectors between points originating from the same track
+    vecs = vecs[vecs[:,1] == 0.0, :]
+
+    # Calculate the corresponding 2D squared radial displacement
+    vecs[:,4] = vecs[:,2]**2 + vecs[:,3]**2
+
+    return vecs, n_tracks 
+
+def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
+    frame_interval=0.01, loc_error=0.0, n_frames=4):
+    """
+    Given a set of trajectories, evaluate the likelihood of each of a set
+    of diffusivities, given each trajectory.
+
+    args
+    ----
+        vecs            :   2D ndarray of shape (n_disps, 6), the output
+                            of *rad_disp_squared* or similar. See the 
+                            docstring for that function for the specifications
+                            of this argument.
+        diffusivities   :   1D ndarray of shape (n_states,), the diffusivities
+                            corresponding to each state in um^2 s^-1
+        state_biases    :   2D ndarray of shape (n_frames, n_states), a bias
+                            term. The value of *state_biases[i,j]* indicates
+                            the probability that a trajectory of length *i+2*
+                            with diffusivity *diffusivities[j]* is observed 
+                            without defocalizing.
+        frame_interval  :   float, the time between frames in seconds
+        loc_error       :   float, 1D localization error in um
+        n_frames        :   int, the number of displacements from each 
+                            trajectory to consider
+
+    returns
+    -------
+        2D ndarray of shape (n_tracks, n_states), the likelihood of each 
+            given each trajectory
+
+    """
+    n_states = diffusivities.shape[0]
+    n_tracks = len(np.unique(vecs[:,5]))
+
+    # Evaluate the naive likelihood of each observed 2D squared jump,
+    # given each of the distinct diffusivities. The likelihood is "naive"
+    # in the sense that it does not incorporate any biases resulting from
+    # defocalization
+    L_cond = np.zeros((vecs.shape[0], n_states), dtype=np.float64)
+    for j, D in enumerate(diffusivities):
+        sig2 = 2 * (D * frame_interval + loc_error ** 2)
+        L_cond[:,j] = np.exp(-vecs[:,4] / (2 * sig2)) / (2 * sig2)
+
+    # Evaluate the likelihood of each trajectory given each diffusivity,
+    # incorporating the biases
+    L_cond = pd.DataFrame(L_cond, columns=diffusivities)
+    L_cond["trajectory"] = vecs[:,5]
+    L_cond["track_length"] = vecs[:,0].astype(np.int64)
+    L = np.zeros((n_tracks, n_states), dtype=np.float64)
+    for j, D in enumerate(diffusivities):
+        L_cond["f_remain"] = L_cond["track_length"].map({i+2: state_biases[i,j] \
+            for i in range(n_frames)})
+        L[:,j] = np.asarray(L_cond.groupby("trajectory")[D].prod() * \
+            L_cond.groupby("trajectory")["f_remain"].first())
+
+    return L 
+
 def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=0.01,
-    dz=0.7, loc_error=0.0):
+    dz=0.7, loc_error=0.0, pixel_size_um=1.0, verbose=True, save_track_diffusivities=False):
     """
     Estimate the fraction of trajectories in each of a spectrum of diffusive states,
     accounting for defocalization over the experimental frame interval.
@@ -111,6 +259,10 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
         frame_interval  :   float, the experimental frame interval in seconds
         dz              :   float, the thickness of the focal slice in um
         loc_error       :   float, 1D localization error in um
+        pixel_size_um   :   float, the size of camera pixels in um. The "y" and "x"
+                            columns of the input dataframe are assumed to be in 
+                            units of pixels
+        verbose         :   bool
 
     returns
     -------
@@ -122,6 +274,9 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
 
     # Work with a copy of the trajectories rather than the original
     tracks = tracks.copy()
+
+    # Convert from pixels to um
+    tracks[['y', 'x']] = tracks[['y', 'x']] * pixel_size_um
 
     # Throw out all points in the trajectories after the first *n_frames*
     tracks["one"] = 1
@@ -138,6 +293,9 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
     tracks = tracks[np.logical_and(tracks["track_length"]>1, tracks["trajectory"]>=0)]
     tracks = tracks.sort_values(by=["trajectory", "frame"])
     n_tracks = tracks['trajectory'].nunique()
+
+    if verbose:
+        print("Total trajectories: {}".format(n_tracks))
 
     # Work with an ndarray copy, for speed. Note that the last two columns
     # are placeholders.
@@ -165,7 +323,7 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
     F_remain = np.zeros((n_frames, nD), dtype=np.float64)
     for j, D in enumerate(D_values):
         F_remain[:,j] = defoc_prob_brownian(D, n_frames, frame_interval=frame_interval,
-            dz=dz, n_gaps=n_gaps)
+            dz=dz, n_gaps=0)
     f_remain_one_interval = F_remain[0,:].copy()
 
     # Get the probability that a trajectory with a given diffusion coefficient
@@ -173,7 +331,7 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
     for frame_idx in range(1, n_frames):
         F_remain[frame_idx-1,:] -= F_remain[frame_idx,:]
 
-    # Normalize (is this necessary?)
+    # Normalize
     F_remain = F_remain / F_remain.sum(axis=0)
 
     # Evaluate the probability density at each jump, given each diffusion
@@ -221,14 +379,21 @@ def expect_max_defoc(tracks, D_values, n_iter=10000, n_frames=4, frame_interval=
         # under the current value of T 
         p[:] = T.sum(axis=0) / n_tracks 
 
-        sys.stdout.write("Finished with %d/%d iterations...\r" % (iter_idx+1, n_iter))
-        sys.stdout.flush()
+        if verbose:
+            sys.stdout.write("Finished with %d/%d iterations...\r" % (iter_idx+1, n_iter))
+            sys.stdout.flush()
 
     # Correct for the probability of defocalization at one frame interval
     p = p / f_remain_one_interval
     p /= p.sum()
 
-    print("")
+    # Save the diffusivity probability vectors for each trajectory
+    if save_track_diffusivities:
+        out = pd.DataFrame(T, columns=D_values)
+        out["trajectory"] = np.asarray(L_cond.groupby("trajectory").apply(lambda i: i.name))
+        out.to_csv("track_diffusivities.csv", index=False)
+
+    if verbose: print("")
     return p 
 
 def pdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0.7,
@@ -346,3 +511,178 @@ def cdf_specdiffuse_model(rt_tuples, D_values, D_occs, frame_interval=0.01, dz=0
         cdfs += cdf_D 
 
     return cdfs 
+
+def gsdiff(tracks, D_values, prior=None, n_iter=1000, burnin=500,
+    n_frames=4, frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0,
+    dz=np.inf, verbose=True, pseudocounts=1, n_threads=1):
+    """
+    Use Gibbs sampling to estimate the posterior distribution of the 
+    state occupations for a multistate Brownian motion with no state
+    transitions, given an observed set of trajectories.
+
+    args
+    ----
+        tracks          :   pandas.DataFrame, the observed trajectories.
+                            Must contain the "y" and "x" columns with
+                            the positions of the localizations in pixels,
+                            a "frame" column with the frame index of 
+                            each localization, and a "trajectory" column
+                            with the index of the corresponding trajectory
+        D_values        :   1D ndarray of shape (K,), the set of diffusion
+                            coefficients, one for each state
+        prior           :   1D ndarray of shape (K,), the prior over the 
+                            state occupations. If *None*, we use a uniform
+                            prior.
+        n_iter          :   int, the number of iterations to do
+        burnin          :   int, the number of iterations to ignore at the
+                            beginning
+        n_frames        ;   int, the number of frames from each trajectory
+                            to consider
+        frame_interval  :   float, the frame interval in seconds
+        loc_error       :   float, the localization error in um
+        pixel_size_um   :   float, the size of pixels in um
+        dz              :   float, thickness of the focal plane in um. The 
+                            default, *np.inf*, indicates an effectively 
+                            infinite focal depth and perfect recovery of 
+                            all displacements.
+        verbose         :   bool
+        pseudocounts    :   int, the weight of the prior. Only relevant if 
+                            *prior* is *None* (that is, using a uniform prior)
+        n_threads       :   int, the number of parallel threads to use. Each
+                            thread executes a complete Gibbs sampling routine
+                            with *n_iter* iterations, and the posterior mean
+                            estimates are averaged at the end
+
+    returns
+    -------
+        1D ndarray of shape (K,), the mean of the posterior distribution
+            over state occupations
+
+    """
+    D_values = np.asarray(D_values)
+
+    # The number of diffusing states
+    K = D_values.shape[0]
+
+    # If no prior is specified, generate a uniform prior
+    if prior is None:
+        prior = np.ones(K, dtype=np.float64) * pseudocounts
+    else:
+        prior = np.asarray(prior)
+        assert prior.shape == D_values.shape, "prior must have the same " \
+            "number of diffusing states as D_values"
+
+    # Calculate squared radial displacements
+    vecs, n_tracks = rad_disp_squared(tracks, start_frame=None, n_frames=n_frames,
+        pixel_size_um=pixel_size_um)
+
+    # Relative probability of detection at each frame interval
+    if dz is np.inf:
+        F_remain = np.ones((n_frames, K), dtype=np.float64)
+        f_remain_one_interval = np.ones(K, dtype=np.float64)
+    else:
+        F_remain = np.zeros((n_frames, K), dtype=np.float64)
+        for j, D in enumerate(D_values):
+            F_remain[:,j] = defoc_prob_brownian(D, n_frames, 
+                frame_interval=frame_interval, dz=dz, n_gaps=0)
+        f_remain_one_interval = F_remain[0,:].copy()
+        F_remain[:-1,:] -= F_remain[1:,:]
+
+    F_remain = F_remain / F_remain.sum(axis=0)
+
+    # Evaluate the likelihood of each trajectory given each diffusive state.
+    # The result, *L[i,j]*, gives the likelihood to observe trajectory i under
+    # diffusive state j.
+    L = evaluate_diffusivity_likelihood(vecs, D_values, state_biases=F_remain,
+        frame_interval=frame_interval, loc_error=loc_error, n_frames=n_frames)
+
+    @dask.delayed
+    def _gibbs_sample(thread_idx, verbose=False):
+        """
+        Run one instance of Gibbs sampling.
+
+        args
+        ----
+            thread_idx      :   int, the index of the thread
+            verbose         :   bool, show the current iteration
+
+        returns
+        -------
+            1D ndarray of shape (K,), the estimated posterior mean
+                over state occupations.
+
+        """
+        # Draw the initial estimate for the state occupations from the prior
+        p = np.random.dirichlet(prior)
+
+        # The accumulating posterior mean
+        mean_p = np.zeros(K, dtype=np.float64)
+
+        # For sampling from the random state occupation vector
+        cdf = np.zeros(n_tracks, dtype=np.float64)
+        unassigned = np.ones(n_tracks, dtype=np.bool)
+        viable = np.zeros(n_tracks, dtype=np.bool)
+
+        # The total counts of each state in the state occupation vector
+        n = np.zeros(K, dtype=np.int64)
+
+        # Sampling loop
+        for iter_idx in range(n_iter):
+
+            # Calculate the probability of each diffusive state, given each 
+            # trajectory and the current parameter values
+            T = L * p 
+            T = (T.T / T.sum(axis=1)).T 
+
+            # Draw a state occupation vector from the current set of probabilities
+            # for each diffusive state, then count the number of instances of each
+            # state among all trajectories
+            u = np.random.random(size=n_tracks)
+            unassigned[:] = True
+            cdf[:] = 0
+            n[:] = 0
+            for j in range(K):
+                cdf += T[:,j]
+                viable = np.logical_and(u<=cdf, unassigned)
+                n[j] = viable.sum()
+                unassigned[viable] = False
+            n[-1] += unassigned.sum()
+
+            # Determine the posterior distribution over the state occupations
+            posterior = prior + n 
+
+            # Draw a new state occupation vector
+            p = np.random.dirichlet(posterior)
+
+            # If after the burnin period, accumulate this estimate into the posterior
+            # mean estimate
+            if iter_idx > burnin:
+                mean_p += p
+
+            if verbose:
+                sys.stdout.write("finished with %d/%d iterations...\r" % (iter_idx+1, n_iter))
+                sys.stdout.flush()
+
+        mean_p /= (n_iter - burnin)
+        return mean_p 
+
+    # Run multi-threaded if the specified number of threads is greater than 1
+    if n_threads == 1:
+        scheduler = "single-threaded"
+    else:
+        scheduler = "processes"
+    jobs = [_gibbs_sample(j, verbose=(j==0)) for j in range(n_threads)]
+    posterior_means = dask.compute(*jobs, scheduler=scheduler, num_workers=n_threads)
+
+    # Accumulate the posterior means across threads
+    posterior_means = np.asarray(posterior_means)
+    posterior_means = posterior_means.sum(axis=0)
+    posterior_means /= posterior_means.sum()
+
+    # Correct for the probability of defocalization at one frame interval
+    # (resulting in no trajectory)
+    posterior_means = posterior_means / f_remain_one_interval
+    posterior_means /= posterior_means.sum()
+
+    return posterior_means
+

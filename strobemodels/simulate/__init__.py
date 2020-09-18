@@ -14,6 +14,7 @@ from .simutils import (
 )
 from .hilosim import (
     strobe_infinite_plane, 
+    strobe_multistate_infinite_plane,
     strobe_one_state_infinite_plane,
     strobe_two_state_infinite_plane,
     strobe_three_state_infinite_plane

@@ -187,6 +187,26 @@ def track_length(tracks):
         on="trajectory"
     )
 
+def assign_index_in_track(tracks):
+    """
+    Given a set of trajectories, determine the index of each localization in the
+    context of its respective trajectory.
+
+    args
+    ----
+        tracks      :   pandas.DataFrame, containing the "trajectory" and "frame"
+                        columns
+
+    returns
+    -------
+        pandas.DataFrame, the same dataframe with a new column, "index_in_track"
+
+    """
+    tracks["one"] =  1
+    tracks["index_in_track"] = tracks.groupby("trajectory")["one"].cumsum() - 1
+    tracks = tracks.drop("one", axis=1)
+    return tracks 
+
 def track_array(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16):
     """
     Convert a set of trajectories from pandas.DataFrame format into a specific

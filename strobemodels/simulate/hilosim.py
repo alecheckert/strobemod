@@ -157,7 +157,7 @@ def strobe_multistate_infinite_plane(model, n_tracks, model_diffusivities,
     # Simulate the states
     tracks = []
     for i, D in enumerate(model_diffusivities):
-        model_obj = DIFFUSION_MODELS[model](dt=frame_interval, track_len=track_len, **model_kwargs)
+        model_obj = DIFFUSION_MODELS[model](D=D, dt=frame_interval, track_len=track_len, **model_kwargs)
         tracks_state = strobe_infinite_plane(model_obj, n_occ[i], dz=dz, loc_error=loc_error,
             exclude_outside=exclude_outside, n_gaps=n_gaps, return_dataframe=return_dataframe)
         tracks.append(tracks_state)
