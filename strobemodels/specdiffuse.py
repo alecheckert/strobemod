@@ -417,7 +417,7 @@ def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
 def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     n_frames=4, frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0,
     dz=np.inf, verbose=True, pseudocounts=1, n_threads=1, 
-    track_diffusivities_out_csv=None):
+    track_diffusivities_out_csv=None, use_gpu=False):
     """
     Use Gibbs sampling to estimate the posterior distribution of the 
     state occupations for a multistate Brownian motion with no state
@@ -460,6 +460,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
                             by trajectory and each column corresponds to the 
                             mean posterior weight of a given diffusivity
                             for that trajectory.
+        use_gpu         :   
 
     returns
     -------
@@ -467,6 +468,9 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             over state occupations
 
     """
+    if use_gpu and n_threads > 1:
+        print("Warning: Can only use a single thread when use_gpu is True")
+
     diffusivities = np.asarray(diffusivities)
 
     # The number of diffusing states
@@ -523,19 +527,35 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
                 over state occupations.
 
         """
+        if use_gpu:
+            import cupy as cp 
+            math_lib = cp 
+            floattype = cp.float32
+            booltype = cp.bool
+            inttype = cp.int32
+
+            # Move the likelihoods to GPU memory
+            L = cp.asarray(L)
+            
+        else:
+            math_lib = np 
+            floattype = np.float64
+            booltype = np.bool
+            inttype = np.int64
+
         # Draw the initial estimate for the state occupations from the prior
-        p = np.random.dirichlet(prior)
+        p = math_lib.random.dirichlet(prior)
 
         # The accumulating posterior mean
-        mean_p = np.zeros(K, dtype=np.float64)
+        mean_p = math_lib.zeros(K, dtype=floattype)
 
         # For sampling from the random state occupation vector
-        cdf = np.zeros(n_tracks, dtype=np.float64)
-        unassigned = np.ones(n_tracks, dtype=np.bool)
-        viable = np.zeros(n_tracks, dtype=np.bool)
+        cdf = math_lib.zeros(n_tracks, dtype=floattype)
+        unassigned = math_lib.ones(n_tracks, dtype=booltype)
+        viable = math_lib.zeros(n_tracks, dtype=booltype)
 
         # The total counts of each state in the state occupation vector
-        n = np.zeros(K, dtype=np.int64)
+        n = math_lib.zeros(K, dtype=inttype)
 
         # Sampling loop
         for iter_idx in range(n_iter):
@@ -548,13 +568,13 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             # Draw a state occupation vector from the current set of probabilities
             # for each diffusive state, then count the number of instances of each
             # state among all trajectories
-            u = np.random.random(size=n_tracks)
+            u = math_lib.random.random(size=n_tracks)
             unassigned[:] = True
             cdf[:] = 0
             n[:] = 0
             for j in range(K):
                 cdf += T[:,j]
-                viable = np.logical_and(u<=cdf, unassigned)
+                viable = math_lib.logical_and(u<=cdf, unassigned)
                 n[j] = viable.sum()
                 unassigned[viable] = False
             n[-1] += unassigned.sum()
@@ -563,26 +583,29 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             posterior = prior + n 
 
             # Draw a new state occupation vector
-            p = np.random.dirichlet(posterior)
+            p = math_lib.random.dirichlet(posterior)
 
             # If after the burnin period, accumulate this estimate into the posterior
             # mean estimate
             if iter_idx > burnin:
                 mean_p += p
 
-            if verbose and iter_idx % 1000 == 0:
+            if verbose and iter_idx % 10 == 0:
                 print("Finished with %d/%d iterations..." % (iter_idx, n_iter))
 
         mean_p /= (n_iter - burnin)
         return mean_p 
 
     # Run multi-threaded if the specified number of threads is greater than 1
-    if n_threads == 1:
-        scheduler = "single-threaded"
+    if not use_gpu:
+        if n_threads == 1:
+            scheduler = "single-threaded"
+        else:
+            scheduler = "processes"
+        jobs = [_gibbs_sample(j, verbose=(j==0)) for j in range(n_threads)]
+        posterior_means = dask.compute(*jobs, scheduler=scheduler, num_workers=n_threads)
     else:
-        scheduler = "processes"
-    jobs = [_gibbs_sample(j, verbose=(j==0)) for j in range(n_threads)]
-    posterior_means = dask.compute(*jobs, scheduler=scheduler, num_workers=n_threads)
+        posterior_means = _gibbs_sample(verbose=True)
 
     # Accumulate the posterior means across threads
     posterior_means = np.asarray(posterior_means)
@@ -600,7 +623,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
 
         # Calculate the probability of each diffusive state, given each trajectory
         # and the posterior model distribution of diffusivities
-        T = L * posterior_means 
+        T = np.array(L) * posterior_means 
         T = (T.T / T.sum(axis=1)).T 
 
         # Format as a pandas.DataFrame
