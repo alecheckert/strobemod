@@ -397,9 +397,8 @@ def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
         # under the current value of T 
         p[:] = T.sum(axis=0) / n_tracks 
 
-        if verbose:
-            sys.stdout.write("Finished with %d/%d iterations...\r" % (iter_idx+1, n_iter))
-            sys.stdout.flush()
+        if verbose and iter_idx % 1000 == 0:
+            print("Finished with %d/%d iterations..." % (iter_idx, n_iter))
 
     # Correct for the probability of defocalization at one frame interval
     p = p / f_remain_one_interval
@@ -571,9 +570,8 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             if iter_idx > burnin:
                 mean_p += p
 
-            if verbose:
-                sys.stdout.write("finished with %d/%d iterations...\r" % (iter_idx+1, n_iter))
-                sys.stdout.flush()
+            if verbose and iter_idx % 1000 == 0:
+                print("Finished with %d/%d iterations..." % (iter_idx, n_iter))
 
         mean_p /= (n_iter - burnin)
         return mean_p 
