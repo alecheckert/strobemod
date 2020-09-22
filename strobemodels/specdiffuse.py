@@ -535,16 +535,19 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             inttype = cp.int32
 
             # Move the likelihoods to GPU memory
-            L = cp.asarray(L)
+            L_act = cp.asarray(L)
+            prior_act = cp.asarray(prior)
             
         else:
             math_lib = np 
             floattype = np.float64
             booltype = np.bool
             inttype = np.int64
+            L_act = np.asarray(L)
+            prior_act = np.asarray(prior)
 
         # Draw the initial estimate for the state occupations from the prior
-        p = math_lib.random.dirichlet(prior)
+        p = math_lib.random.dirichlet(prior_act)
 
         # The accumulating posterior mean
         mean_p = math_lib.zeros(K, dtype=floattype)
@@ -562,7 +565,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
 
             # Calculate the probability of each diffusive state, given each 
             # trajectory and the current parameter values
-            T = L * p 
+            T = L_act * p 
             T = (T.T / T.sum(axis=1)).T 
 
             # Draw a state occupation vector from the current set of probabilities
@@ -580,7 +583,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             n[-1] += unassigned.sum()
 
             # Determine the posterior distribution over the state occupations
-            posterior = prior + n 
+            posterior = prior_act + n 
 
             # Draw a new state occupation vector
             p = math_lib.random.dirichlet(posterior)
@@ -604,12 +607,17 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             scheduler = "processes"
         jobs = [_gibbs_sample(j, verbose=(j==0)) for j in range(n_threads)]
         posterior_means = dask.compute(*jobs, scheduler=scheduler, num_workers=n_threads)
-    else:
-        posterior_means = _gibbs_sample(verbose=True)
 
-    # Accumulate the posterior means across threads
-    posterior_means = np.asarray(posterior_means)
-    posterior_means = posterior_means.sum(axis=0)
+        # Accumulate the posterior means across threads
+        posterior_means = np.asarray(posterior_means)
+        posterior_means = posterior_means.sum(axis=0)
+    else:
+        import cupy as cp
+        jobs = [_gibbs_sample(0, verbose=True)]
+        posterior_means_gpu = dask.compute(*jobs, scheduler="single-threaded", num_workers=1)
+        posterior_means = cp.asnumpy(posterior_means_gpu[0])
+
+    # Normalize
     posterior_means /= posterior_means.sum()
 
     # Correct for the probability of defocalization at one frame interval
