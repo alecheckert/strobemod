@@ -25,7 +25,8 @@ from .models import pdf_1state_brownian, cdf_1state_brownian
 
 # Custom utilities
 from .utils import (
-    assign_index_in_track
+    assign_index_in_track,
+    track_length
 )
 
 def expect_max(data, likelihood, diffusivities, n_iter=1000, **kwargs):
@@ -132,10 +133,7 @@ def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0):
     tracks = tracks[tracks["index_in_track"] <= n_frames].copy()
 
     # Calculate trajectory length
-    tracks = tracks.join(
-        tracks.groupby("trajectory").size().rename("track_length"),
-        on="trajectory"
-    )
+    tracks = track_length(tracks)
 
     # Exclude singlets and non-trajectories from the analysis
     tracks = tracks[np.logical_and(tracks["track_length"] > 1, tracks["trajectory"] >= 0)]
@@ -164,6 +162,76 @@ def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0):
     vecs[:,4] = vecs[:,2]**2 + vecs[:,3]**2
 
     return vecs, n_tracks 
+
+def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupations,
+    frame_interval=0.01, loc_error=0.0, n_frames=4, pixel_size_um=0.16, dz=0.7):
+    """
+    Given a set of trajectories and a particular mixture model of 
+    diffusivities, evaluate the probability of each trajectory given 
+    each separate diffusivity.
+
+    args
+    ----
+        tracks          :   pandas.DataFrame, the set of trajectories
+        diffusivities   :   1D ndarray of dtype float64, the set of 
+                            diffusivities in um^2 s^-1
+        occupations     :   1D ndarray of dtype float64, the occupations
+                            of each diffusivity. Must sum to 1.
+        frame_interval  :   float, the frame interval in seconds
+        loc_error       :   float, the localization error in um
+        n_frames        :   int, the number of displacements to consider
+                            from each trajectory
+        pixel_size_um   :   float, the number of um per unit pixel
+        dz              :   float, focal depth in um
+
+    returns
+    -------
+        pandas.DataFrame. Each row corresponds to one trajectory (whose
+            index in the original *tracks* dataframe is given by the 
+            "trajectory" column), and each column (apart from "trajectory")
+            corresponds to one of the diffusivities. Then the element
+
+            result.loc[track_idx, diffusivity]
+
+            corresponds to the likelihood of *diffusivity* given the 
+            observed trajectory with index *track_idx*.
+
+    """
+    # The number of distinct diffusivities
+    K = len(diffusivities)
+
+    # Calculate squared radial displacements
+    vecs, n_tracks = rad_disp_squared(tracks, start_frame=None, n_frames=n_frames,
+        pixel_size_um=pixel_size_um)
+
+    # Get the probability of remaining in the focal volume for each 
+    # diffusive state at each of the frame intervals under consideration
+    F_remain = np.zeros((n_frames, nD), dtype=np.float64)
+    for j, D in enumerate(diffusivities):
+        F_remain[:,j] = defoc_prob_brownian(D, n_frames, frame_interval=frame_interval,
+            dz=dz, n_gaps=0)
+    f_remain_one_interval = F_remain[0,:].copy()
+
+    # Get the probability that a trajectory with a given diffusion coefficient
+    # remains in focus for *exactly* so many frame intervals
+    for frame_idx in range(1, n_frames):
+        F_remain[frame_idx-1,:] -= F_remain[frame_idx,:]
+
+    # Normalize
+    F_remain = F_remain / F_remain.sum(axis=0)
+
+    # Evaluate the likelihood of each diffusivity, given each trajectory. The
+    # result, *L[i,j]*, gives the likelihood to observe trajectory i under 
+    # diffusive state j
+    L, track_indices = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
+        frame_interval=frame_interval, loc_error=loc_error, n_frames=n_frames)
+
+    # Format the result as a dataframe
+    columns = ["%.5f" % d for d in diffusivities]
+    L = pd.DataFrame(L, columns=columns)
+    L["trajectory"] = track_indices 
+
+    return L 
 
 def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
     frame_interval=0.01, loc_error=0.0, n_frames=4):
@@ -219,10 +287,14 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
         L[:,j] = np.asarray(L_cond.groupby("trajectory")[D].prod() * \
             L_cond.groupby("trajectory")["f_remain"].first())
 
-    return L 
+    # Record the trajectory indices as well
+    track_indices = np.asarray(L_cond.groupby("trajectory").apply(lambda i: i.name)).astype(np.int64)
+
+    return L, track_indices
 
 def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
-    dz=0.7, loc_error=0.0, pixel_size_um=1.0, verbose=True, save_track_diffusivities=False):
+    dz=0.7, loc_error=0.0, pixel_size_um=1.0, verbose=True,
+    track_diffusivities_out_csv=None):
     """
     Estimate the fraction of trajectories in each of a spectrum of diffusive states,
     accounting for defocalization over the experimental frame interval, using an
@@ -264,6 +336,11 @@ def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
                             columns of the input dataframe are assumed to be in 
                             units of pixels
         verbose         :   bool
+        track_diffusivities_out_csv :   str, file to save the individual trajectory
+                            diffusivities to. The result is indexed by trajectory
+                            and each column corresponds to the likelihood of one
+                            of the diffusivities given that trajectory, under the
+                            posterior model.
 
     returns
     -------
@@ -297,7 +374,7 @@ def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
     # Evaluate the likelihood of each diffusivity, given each trajectory. The
     # result, *L[i,j]*, gives the likelihood to observe trajectory i under 
     # diffusive state j
-    L = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
+    L, track_indices = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
         frame_interval=frame_interval, loc_error=loc_error, n_frames=n_frames)
 
     # The probabilities that each observation belongs to each diffusive state,
@@ -329,133 +406,19 @@ def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
     p /= p.sum()
 
     # Save the diffusivity probability vectors for each trajectory
-    if save_track_diffusivities:
-        out = pd.DataFrame(T, columns=diffusivities.round(1))
-        out["trajectory"] = np.asarray(L_cond.groupby("trajectory").apply(lambda i: i.name))
-        out.to_csv("track_diffusivities.csv", index=False)
+    if not track_diffusivities_out_csv is None:
+        columns = ["%.5f" % d for d in diffusivities]
+        out = pd.DataFrame(T, columns=columns)
+        out["trajectory"] = track_indices 
+        out.to_csv(track_diffusivities_out_csv, index=False)
 
     if verbose: print("")
     return p 
 
-def pdf_specdiffuse_model(rt_tuples, diffusivities, D_occs, frame_interval=0.01, dz=0.7,
-    loc_error=0.0):
-    """
-    Evaluate the probability density function for a mixed Brownian model with
-    any number of non-interconverting states, accounting for defocalization.
-
-    args
-    ----
-        rt_tuples           :   2D ndarray of shape (N, 2), the set of (radial displacement
-                                in um, delay in seconds) tuples at which to evaluate the PDF
-        diffusivities       :   1D ndarray of shape (M,), the set of diffusivities
-        D_occs              :   1D ndarray of shape (M,), the set of state occupations
-        frame_interval      :   float, time between frames in seconds
-        dz                  :   float, the thickness of the observation slice in um
-        loc_error           :   float, 1D localization error in um
-
-    returns
-    -------
-        1D ndarray of shape (N,), the PDF evaluated at each point of the support
-
-    """
-    N = rt_tuples.shape[0]
-    M = len(diffuvisities)
-
-    # Get the unique time intervals present in this set of data
-    unique_dt = np.unique(rt_tuples[:,1])
-    n_frames = len(unique_dt)
-
-    # Evaluate the defocalization probabilities for each diffusive state
-    F_remain = np.zeros((M, n_frames), dtype=np.float64)
-    for i, D in enumerate(diffusivities):
-        F_remain[i,:] = defoc_prob_brownian(D, n_frames, frame_interval,
-            dz, n_gaps=0)
-
-    # Multiply by the state occupation estimates
-    F_remain = (F_remain.T * D_occs).T 
-
-    # Normalize on each frame interval
-    F_remain = F_remain / F_remain.sum(axis=0)
-
-    # Evaluate the PDFs for each state
-    pdfs = np.zeros(N, dtype=np.float64)
-    r2 = rt_tuples[:,0] ** 2
-    for i, D in enumerate(diffusivities):
-
-        pdf_D = np.zeros(N, dtype=np.float64)
-
-        for j, dt in enumerate(unique_dt):
-
-            # Evaluate the naive PDF for this diffusivity
-            match = rt_tuples[:,1] == dt 
-            sig2 = 2 * (D * dt + loc_error**2)
-            pdf_D[match] = rt_tuples[match, 0] * np.exp(-r2[match] / (2 * sig2)) / sig2 
-            pdf_D[match] = pdf_D[match] * F_remain[i,j]
-
-        pdfs += pdf_D 
-
-    return pdfs 
-
-def cdf_specdiffuse_model(rt_tuples, diffusivities, D_occs, frame_interval=0.01, dz=0.7,
-    loc_error=0.0):
-    """
-    Evaluate the cumulative distribution function for a mixed Brownian model
-    with any number of non-interconverting states, accounting for defocalization.
-
-    args
-    ----
-        rt_tuples           :   2D ndarray of shape (N, 2), the set of (radial displacement
-                                in um, delay in seconds) tuples at which to evaluate the PDF
-        diffusivities       :   1D ndarray of shape (M,), the set of diffusivities
-        D_occs              :   1D ndarray of shape (M,), the set of state occupations
-        frame_interval      :   float, time between frames in seconds
-        dz                  :   float, the thickness of the observation slice in um
-        loc_error           :   float, 1D localization error in um
-
-    returns
-    -------
-        1D ndarray of shape (N,), the PDF evaluated at each point of the support
-
-    """
-    N = rt_tuples.shape[0]
-    M = len(diffusivities)
-
-    # Get the unique time intervals present in this set of data
-    unique_dt = np.unique(rt_tuples[:,1])
-    n_frames = len(unique_dt)
-
-    # Evaluate the defocalization probabilities for each diffusive state
-    F_remain = np.zeros((M, n_frames), dtype=np.float64)
-    for i, D in enumerate(diffusivities):
-        F_remain[i,:] = defoc_prob_brownian(D, n_frames, frame_interval,
-            dz, n_gaps=0)
-
-    # Multiply by the state occupation estimates
-    F_remain = (F_remain.T * D_occs).T 
-
-    # Normalize on each frame interval
-    F_remain = F_remain / F_remain.sum(axis=0)
-
-    # Evaluate the CDFs for each state
-    cdfs = np.zeros(N, dtype=np.float64)
-    r2 = rt_tuples[:,0] ** 2
-    for i, D in enumerate(diffusivities):
-
-        cdf_D = np.zeros(N, dtype=np.float64)
-
-        for j, dt in enumerate(unique_dt):
-            sig2 = 2 * (D * dt + loc_error**2)
-            match = rt_tuples[:,1] == dt 
-            cdf_D[match] = 1.0 - np.exp(-r2[match] / (2 * sig2))
-            cdf_D[match] = cdf_D[match] * F_remain[i,j]
-
-        cdfs += cdf_D 
-
-    return cdfs 
-
 def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     n_frames=4, frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0,
-    dz=np.inf, verbose=True, pseudocounts=1, n_threads=1):
+    dz=np.inf, verbose=True, pseudocounts=1, n_threads=1, 
+    track_diffusivities_out_csv=None):
     """
     Use Gibbs sampling to estimate the posterior distribution of the 
     state occupations for a multistate Brownian motion with no state
@@ -493,6 +456,11 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
                             thread executes a complete Gibbs sampling routine
                             with *n_iter* iterations, and the posterior mean
                             estimates are averaged at the end
+        track_diffusivities_out_csv     :   str, file to save the individual
+                            trajectory diffusivities to. The result is indexed
+                            by trajectory and each column corresponds to the 
+                            mean posterior weight of a given diffusivity
+                            for that trajectory.
 
     returns
     -------
@@ -534,8 +502,11 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     # Evaluate the likelihood of each trajectory given each diffusive state.
     # The result, *L[i,j]*, gives the likelihood to observe trajectory i under
     # diffusive state j.
-    L = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
+    L, track_indices = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
         frame_interval=frame_interval, loc_error=loc_error, n_frames=n_frames)
+
+    assert len(track_indices) == n_tracks
+    print("Total trajectory count: {}".format(n_tracks))
 
     @dask.delayed
     def _gibbs_sample(thread_idx, verbose=False):
@@ -625,5 +596,52 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     posterior_means = posterior_means / f_remain_one_interval
     posterior_means /= posterior_means.sum()
 
+    # If desired, evaluate the likelihoods of each diffusivity for each trajectory
+    # under the model specified by the posterior mean. Then save these to a csv
+    if not track_diffusivities_out_csv is None:
+
+        # Calculate the probability of each diffusive state, given each trajectory
+        # and the posterior model distribution of diffusivities
+        T = L * posterior_means 
+        T = (T.T / T.sum(axis=1)).T 
+
+        # Format as a pandas.DataFrame
+        columns = ["%.5f" % d for d in diffusivities]
+        out_df = pd.DataFrame(T, columns=columns)
+        out_df["trajectory"] = track_indices
+
+        # Save 
+        out_df.to_csv(track_diffusivities_out_csv, index=False)
+
     return posterior_means
+
+def associate_diffusivity(tracks, track_diffusivities, diffusivity):
+    """
+    Map diffusivity likelihoods back to their respective trajectories.
+
+    The purpose of this function is to take the output of 
+    evaluate_diffusivity_likelihoods_on_tracks and map one of the 
+    components of the diffusivity likelihood vector back onto the 
+    original trajectories.
+
+    args
+    ----
+        tracks      :   pandas.DataFrame, a set of trajectories
+        track_diffusivities     :   pandas.DataFrame, the probability
+                       of each diffusivity for each trajectory
+        diffusivity     :   float or str, the specific diffusivity
+                        to associate into the track CSV
+
+    returns
+    -------
+        pandas.DataFrame, the tracks CSV with the new column
+
+    """
+    if isinstance(diffusivity, float):
+        diffusivity = str(diffusivity)
+
+    col = "diffusivity_{}".format(diffusivity)
+    tracks[col] = tracks["trajectory"].map(track_diffusivities[diffusivity])
+
+    return tracks 
 

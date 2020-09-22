@@ -159,6 +159,61 @@ def concat_tracks(*tracks):
 
     return out 
 
+def concat_tracks_files(*csv_paths, out_csv=None, drop_singlets=False):
+    """
+    Given a set of trajectories stored as CSVs, concatenate all
+    of them, storing the paths to the original CSVs in the resulting
+    dataframe, and optionally save the result to another CSV.
+
+    args
+    ----
+        csv_paths       :   list of str, a set of trajectory CSVs.
+                            Each must contain the "y", "x", "trajectory",
+                            and "frame" columns
+        out_csv         :   str, path to save to 
+        drop_singlets   :   bool, drop singlet localizations before
+                            concatenating
+
+    returns
+    -------
+        pandas.DataFrame, the concatenated result
+
+    """
+    n = len(csv_paths)
+
+    def drop_singlets_dataframe(tracks):
+        """
+        Drop all singlets and unassigned localizations from a 
+        pandas.DataFrame with trajectory information.
+
+        """
+        tracks = track_length(tracks)
+        tracks = tracks[np.logical_and(tracks["track_length"]>1,
+            tracks["trajectory"]>=0)]
+        return tracks 
+
+    # Load the trajectories into memory
+    tracks = []
+    for path in csv_paths:
+        if drop_singlets:
+            tracks.append(drop_singlets_dataframe(pd.read_csv(path)))
+        else:
+            tracks.append(pd.read_csv(path))
+
+    # Concatenate 
+    tracks = concat_tracks(*tracks)
+
+    # Map the original path back to each file
+    for i, path in enumerate(csv_paths):
+        tracks.loc[tracks["dataframe_index"]==i, "source_file"] = \
+            os.path.abspath(path)
+
+    # Optionally save concatenated trajectories to a new CSV
+    if not out_csv is None:
+        tracks.to_csv(out_csv, index=False)
+
+    return tracks 
+
 #############################################
 ## GENERATE RADIAL DISPLACEMENT HISTOGRAMS ##
 #############################################

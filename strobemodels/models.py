@@ -1290,6 +1290,122 @@ def pdf_3state_brownian_zcorr(rt_tuples, f0, f1, D0, D1, D2, loc_error,
 
     return result 
 
+def pdf_specdiffuse_model(rt_tuples, diffusivities, D_occs, frame_interval=0.01, dz=0.7,
+    loc_error=0.0):
+    """
+    Evaluate the probability density function for a mixed Brownian model with
+    any number of non-interconverting states, accounting for defocalization.
+
+    args
+    ----
+        rt_tuples           :   2D ndarray of shape (N, 2), the set of (radial displacement
+                                in um, delay in seconds) tuples at which to evaluate the PDF
+        diffusivities       :   1D ndarray of shape (M,), the set of diffusivities
+        D_occs              :   1D ndarray of shape (M,), the set of state occupations
+        frame_interval      :   float, time between frames in seconds
+        dz                  :   float, the thickness of the observation slice in um
+        loc_error           :   float, 1D localization error in um
+
+    returns
+    -------
+        1D ndarray of shape (N,), the PDF evaluated at each point of the support
+
+    """
+    N = rt_tuples.shape[0]
+    M = len(diffuvisities)
+
+    # Get the unique time intervals present in this set of data
+    unique_dt = np.unique(rt_tuples[:,1])
+    n_frames = len(unique_dt)
+
+    # Evaluate the defocalization probabilities for each diffusive state
+    F_remain = np.zeros((M, n_frames), dtype=np.float64)
+    for i, D in enumerate(diffusivities):
+        F_remain[i,:] = defoc_prob_brownian(D, n_frames, frame_interval,
+            dz, n_gaps=0)
+
+    # Multiply by the state occupation estimates
+    F_remain = (F_remain.T * D_occs).T 
+
+    # Normalize on each frame interval
+    F_remain = F_remain / F_remain.sum(axis=0)
+
+    # Evaluate the PDFs for each state
+    pdfs = np.zeros(N, dtype=np.float64)
+    r2 = rt_tuples[:,0] ** 2
+    for i, D in enumerate(diffusivities):
+
+        pdf_D = np.zeros(N, dtype=np.float64)
+
+        for j, dt in enumerate(unique_dt):
+
+            # Evaluate the naive PDF for this diffusivity
+            match = rt_tuples[:,1] == dt 
+            sig2 = 2 * (D * dt + loc_error**2)
+            pdf_D[match] = rt_tuples[match, 0] * np.exp(-r2[match] / (2 * sig2)) / sig2 
+            pdf_D[match] = pdf_D[match] * F_remain[i,j]
+
+        pdfs += pdf_D 
+
+    return pdfs 
+
+def cdf_specdiffuse_model(rt_tuples, diffusivities, D_occs, frame_interval=0.01, dz=0.7,
+    loc_error=0.0):
+    """
+    Evaluate the cumulative distribution function for a mixed Brownian model
+    with any number of non-interconverting states, accounting for defocalization.
+
+    args
+    ----
+        rt_tuples           :   2D ndarray of shape (N, 2), the set of (radial displacement
+                                in um, delay in seconds) tuples at which to evaluate the PDF
+        diffusivities       :   1D ndarray of shape (M,), the set of diffusivities
+        D_occs              :   1D ndarray of shape (M,), the set of state occupations
+        frame_interval      :   float, time between frames in seconds
+        dz                  :   float, the thickness of the observation slice in um
+        loc_error           :   float, 1D localization error in um
+
+    returns
+    -------
+        1D ndarray of shape (N,), the PDF evaluated at each point of the support
+
+    """
+    N = rt_tuples.shape[0]
+    M = len(diffusivities)
+
+    # Get the unique time intervals present in this set of data
+    unique_dt = np.unique(rt_tuples[:,1])
+    n_frames = len(unique_dt)
+
+    # Evaluate the defocalization probabilities for each diffusive state
+    F_remain = np.zeros((M, n_frames), dtype=np.float64)
+    for i, D in enumerate(diffusivities):
+        F_remain[i,:] = defoc_prob_brownian(D, n_frames, frame_interval,
+            dz, n_gaps=0)
+
+    # Multiply by the state occupation estimates
+    F_remain = (F_remain.T * D_occs).T 
+
+    # Normalize on each frame interval
+    F_remain = F_remain / F_remain.sum(axis=0)
+
+    # Evaluate the CDFs for each state
+    cdfs = np.zeros(N, dtype=np.float64)
+    r2 = rt_tuples[:,0] ** 2
+    for i, D in enumerate(diffusivities):
+
+        cdf_D = np.zeros(N, dtype=np.float64)
+
+        for j, dt in enumerate(unique_dt):
+            sig2 = 2 * (D * dt + loc_error**2)
+            match = rt_tuples[:,1] == dt 
+            cdf_D[match] = 1.0 - np.exp(-r2[match] / (2 * sig2))
+            cdf_D[match] = cdf_D[match] * F_remain[i,j]
+
+        cdfs += cdf_D 
+
+    return cdfs 
+
 ######################
 ## AVAILABLE MODELS ##
 ######################
