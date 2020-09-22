@@ -159,7 +159,8 @@ def concat_tracks(*tracks):
 
     return out 
 
-def concat_tracks_files(*csv_paths, out_csv=None, drop_singlets=False):
+def concat_tracks_files(*csv_paths, out_csv=None, start_frame=0,
+    drop_singlets=False):
     """
     Given a set of trajectories stored as CSVs, concatenate all
     of them, storing the paths to the original CSVs in the resulting
@@ -171,6 +172,8 @@ def concat_tracks_files(*csv_paths, out_csv=None, drop_singlets=False):
                             Each must contain the "y", "x", "trajectory",
                             and "frame" columns
         out_csv         :   str, path to save to 
+        start_frame     :   int, exclude any trajectories that begin before
+                            this frame
         drop_singlets   :   bool, drop singlet localizations before
                             concatenating
 
@@ -181,12 +184,28 @@ def concat_tracks_files(*csv_paths, out_csv=None, drop_singlets=False):
     """
     n = len(csv_paths)
 
+    def drop_before_start_frame(tracks, start_frame):
+        """
+        Drop all trajectories that start before a specific frame.
+
+        """
+        tracks = tracks.join(
+            (tracks.groupby("trajectory")["frame"].first() >= start_frame).rename("_take"),
+            on="trajectory"
+        )
+        tracks = tracks[tracks["_take"]]
+        tracks = tracks.drop("_take", axis=1)
+        return tracks
+
     def drop_singlets_dataframe(tracks):
         """
         Drop all singlets and unassigned localizations from a 
         pandas.DataFrame with trajectory information.
 
         """
+        if start_frame != 0:
+            tracks = drop_before_start_frame(tracks, start_frame)
+
         tracks = track_length(tracks)
         tracks = tracks[np.logical_and(tracks["track_length"]>1,
             tracks["trajectory"]>=0)]
