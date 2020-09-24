@@ -47,7 +47,7 @@ from .plot import (
 
 def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01, n_gaps=0,
     pixel_size_um=0.16, bounds=None, guess=None, plot=False, show_plot=True, save_png=None, 
-    weight_timesteps=False, weight_short_disps=False, max_jump=5.0, **model_kwargs):
+    weight_timesteps=False, weight_short_disps=False, max_jump=5.0, first_only=True, **model_kwargs):
     """
     Fit a set of trajectories to a diffusion model by minimizing the squared deviation
     between the experimental and model CDFs at each of a set of time points. Return
@@ -101,7 +101,7 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
 
     # Compile jump lengths
     H, bin_edges = rad_disp_histogram_2d(tracks, n_frames=n_frames, bin_size=bin_size,
-        pixel_size_um=pixel_size_um, max_jump=max_jump, first_only=True, n_gaps=n_gaps)
+        pixel_size_um=pixel_size_um, max_jump=max_jump, first_only=first_only, n_gaps=n_gaps)
     n_bins = bin_edges.shape[0] - 1
 
     # Catch pathological input: if there are no recorded displacements, then return

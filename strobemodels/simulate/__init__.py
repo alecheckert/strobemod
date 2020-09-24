@@ -17,5 +17,7 @@ from .hilosim import (
     strobe_multistate_infinite_plane,
     strobe_one_state_infinite_plane,
     strobe_two_state_infinite_plane,
-    strobe_three_state_infinite_plane
+    strobe_three_state_infinite_plane,
+    strobe_nucleus,
+    strobe_multistate_nucleus
 )

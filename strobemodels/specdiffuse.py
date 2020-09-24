@@ -223,7 +223,7 @@ def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupation
     # Evaluate the likelihood of each diffusivity, given each trajectory. The
     # result, *L[i,j]*, gives the likelihood to observe trajectory i under 
     # diffusive state j
-    L, track_indices = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
+    L, track_indices, track_lengths = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
         frame_interval=frame_interval, loc_error=loc_error, n_frames=n_frames)
 
     # Format the result as a dataframe
@@ -266,6 +266,9 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
     n_states = diffusivities.shape[0]
     n_tracks = len(np.unique(vecs[:,5]))
 
+    if state_biases is None:
+        state_biases = np.ones((n_frames, n_states), dtype=np.float64)
+
     # Evaluate the naive likelihood of each observed 2D squared jump,
     # given each of the distinct diffusivities. The likelihood is "naive"
     # in the sense that it does not incorporate any biases resulting from
@@ -290,11 +293,14 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
     # Record the trajectory indices as well
     track_indices = np.asarray(L_cond.groupby("trajectory").apply(lambda i: i.name)).astype(np.int64)
 
-    return L, track_indices
+    # Record the trajectory lengths as well
+    track_lengths = np.asarray(L_cond.groupby("trajectory")["track_length"].first())
+
+    return L, track_indices, track_lengths 
 
 def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
     dz=0.7, loc_error=0.0, pixel_size_um=1.0, verbose=True,
-    track_diffusivities_out_csv=None):
+    track_diffusivities_out_csv=None, mode="by_trajectory"):
     """
     Estimate the fraction of trajectories in each of a spectrum of diffusive states,
     accounting for defocalization over the experimental frame interval, using an
@@ -355,27 +361,52 @@ def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
     vecs, n_tracks = rad_disp_squared(tracks, start_frame=None, n_frames=n_frames,
         pixel_size_um=pixel_size_um)
 
-    # Get the probability of remaining in the focal volume for each 
-    # diffusive state at each of the frame intervals under consideration
-    F_remain = np.zeros((n_frames, nD), dtype=np.float64)
-    for j, D in enumerate(diffusivities):
-        F_remain[:,j] = defoc_prob_brownian(D, n_frames, frame_interval=frame_interval,
-            dz=dz, n_gaps=0)
-    f_remain_one_interval = F_remain[0,:].copy()
+    if mode == "by_displacement":
 
-    # Get the probability that a trajectory with a given diffusion coefficient
-    # remains in focus for *exactly* so many frame intervals
-    for frame_idx in range(1, n_frames):
-        F_remain[frame_idx-1,:] -= F_remain[frame_idx,:]
+        # Get the probability of remaining in the focal volume for each 
+        # diffusive state at each of the frame intervals under consideration
+        F_remain = np.zeros((n_frames, nD), dtype=np.float64)
+        for j, D in enumerate(diffusivities):
+            F_remain[:,j] = defoc_prob_brownian(D, n_frames, frame_interval=frame_interval,
+                dz=dz, n_gaps=0)
+        f_remain_one_interval = F_remain[0,:].copy()
 
-    # Normalize
-    F_remain = F_remain / F_remain.sum(axis=0)
+        # Get the probability that a trajectory with a given diffusion coefficient
+        # remains in focus for *exactly* so many frame intervals
+        for frame_idx in range(1, n_frames):
+            F_remain[frame_idx-1,:] -= F_remain[frame_idx,:]
+
+        # Normalize
+        F_remain = F_remain / F_remain.sum(axis=0)
+
+        ## EXPERIMENTAL BUT YIELDS TOTALLY CORRECT ANSWERS
+        for j, D in enumerate(diffusivities):
+            F_remain[:,j] = f_remain_one_interval[j]
+
+    elif mode == "by_trajectory":
+
+        # The fraction of molecules corresponding to each of the diffusivities
+        # that, after being first observed at some point uniformly distributed
+        # inside the focal volume, are found inside the focal volume after 1 frame.
+        # This is equal to the number of trajectories sampled within the focal 
+        # volume that actually contribute displacements
+        f_remain_one_interval = np.zeros(nD, dtype=np.float64)
+        for j, D in enumerate(diffusivities):
+            f_remain_one_interval[j] = defoc_prob_brownian(D, 1,
+                frame_interval=frame_interval, dz=dz, n_gaps=0)[0]
+
+        # Correction factor all ones, if doing analysis by trajectory
+        F_remain = np.ones((n_frames, nD), dtype=np.float64)
 
     # Evaluate the likelihood of each diffusivity, given each trajectory. The
     # result, *L[i,j]*, gives the likelihood to observe trajectory i under 
     # diffusive state j
-    L, track_indices = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
-        frame_interval=frame_interval, loc_error=loc_error, n_frames=n_frames)
+    L, track_indices, track_lengths = evaluate_diffusivity_likelihood(vecs, diffusivities,
+        state_biases=F_remain, frame_interval=frame_interval, loc_error=loc_error,
+        n_frames=n_frames)
+
+    # The number of displacements corresponding to each trajectory
+    track_n_disps = track_lengths - 1
 
     # The probabilities that each observation belongs to each diffusive state,
     # given the set of observations, their accompanying complete likelihood
@@ -389,12 +420,15 @@ def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
     for iter_idx in range(n_iter):
 
         # Evaluate the probability that each observation belongs to each 
-        # diffusive state
+        # diffusive state. Optionally, weight each trajectory's influence
+        # in the result by the number of displacements.
         T = L * p 
+        if mode == "by_displacement":
+            T = (T.T * track_n_disps).T 
         T = (T.T / T.sum(axis=1)).T 
 
         # Find the value of p that maximizes the expected log-likelihood
-        # under the current value of T 
+        # under the current value of T
         p[:] = T.sum(axis=0) / n_tracks 
 
         if verbose and iter_idx % 1000 == 0:
@@ -417,7 +451,7 @@ def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
 def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     n_frames=4, frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0,
     dz=np.inf, verbose=True, pseudocounts=1, n_threads=1, 
-    track_diffusivities_out_csv=None):
+    track_diffusivities_out_csv=None, mode="by_trajectory"):
     """
     Use Gibbs sampling to estimate the posterior distribution of the 
     state occupations for a multistate Brownian motion with no state
@@ -460,6 +494,11 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
                             by trajectory and each column corresponds to the 
                             mean posterior weight of a given diffusivity
                             for that trajectory.
+        weight_by_number_of_disps   :   bool. If True, each trajectory contributes
+                            a weight to the parameter estimate that is equal 
+                            to the number of displacements that are being 
+                            considered from that trajectory. Otherwise, the 
+                            weights of every trajectory are the same.
 
     returns
     -------
@@ -485,24 +524,68 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         pixel_size_um=pixel_size_um)
 
     # Relative probability of detection at each frame interval
-    if dz is np.inf:
-        F_remain = np.ones((n_frames, K), dtype=np.float64)
-        f_remain_one_interval = np.ones(K, dtype=np.float64)
-    else:
-        F_remain = np.zeros((n_frames, K), dtype=np.float64)
-        for j, D in enumerate(diffusivities):
-            F_remain[:,j] = defoc_prob_brownian(D, n_frames, 
-                frame_interval=frame_interval, dz=dz, n_gaps=0)
-        f_remain_one_interval = F_remain[0,:].copy()
-        F_remain[:-1,:] -= F_remain[1:,:]
+    if mode == "by_displacement":
+        if dz is np.inf:
+            F_remain = np.ones((n_frames, K), dtype=np.float64)
+            f_remain_one_interval = np.ones(K, dtype=np.float64)
+        else:
+            F_remain = np.zeros((n_frames, K), dtype=np.float64)
+            for j, D in enumerate(diffusivities):
+                F_remain[:,j] = defoc_prob_brownian(D, n_frames, 
+                    frame_interval=frame_interval, dz=dz, n_gaps=0)
 
-    F_remain = F_remain / F_remain.sum(axis=0)
+            # Record the probability that any displacements are observed at all,
+            # given a trajectory of each diffusivity. (That is, the probability that
+            # this isn't just a singlet that subsequently defocalizes.)
+            f_remain_one_interval = F_remain[0,:].copy()
+            F_remain[:-1,:] -= F_remain[1:,:]
+
+            ## EXPERIMENTAL
+            for j in range(K):
+                F_remain[:,j] = f_remain_one_interval[j]
+
+        F_remain = F_remain / F_remain.sum(axis=0)
+
+    elif mode == "by_trajectory":
+
+        # The fraction of molecules corresponding to each of the diffusivities
+        # that, after being first observed at some point uniformly distributed
+        # inside the focal volume, are found inside the focal volume after 1 frame.
+        # This is equal to the number of trajectories sampled within the focal 
+        # volume that actually contribute displacements
+        f_remain_one_interval = np.zeros(K, dtype=np.float64)
+        for j, D in enumerate(diffusivities):
+            f_remain_one_interval[j] = defoc_prob_brownian(D, 1,
+                frame_interval=frame_interval, dz=dz, n_gaps=0)[0]
+
+        # Correction factor all ones, if doing analysis by trajectory
+        F_remain = np.ones((n_frames, K), dtype=np.float64)
+
+    # # If weighting by the number of displacements, then it is improper to
+    # # evaluate the relative probability of detection beyond a single frame
+    # # interval (tentative)
+    # if weight_by_number_of_disps:
+    #     F_remain[:] = 1.0
+
+
+    ## EXPERIMENTAL
+    # for j in range(n_frames):
+    #     F_remain[j,:] = f_remain_one_interval
+
+    # F_remain[:] = 1.0
+
+    ## END EXPERIMENTAL
+
 
     # Evaluate the likelihood of each trajectory given each diffusive state.
     # The result, *L[i,j]*, gives the likelihood to observe trajectory i under
     # diffusive state j.
-    L, track_indices = evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=F_remain,
-        frame_interval=frame_interval, loc_error=loc_error, n_frames=n_frames)
+    L, track_indices, track_lengths = evaluate_diffusivity_likelihood(vecs,
+        diffusivities, state_biases=F_remain, frame_interval=frame_interval,
+        loc_error=loc_error, n_frames=n_frames)
+
+    # The number of displacements corresponding to each trajectory
+    n_disps = track_lengths - 1
 
     assert len(track_indices) == n_tracks
     print("Total trajectory count: {}".format(n_tracks))
@@ -555,9 +638,23 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             for j in range(K):
                 cdf += T[:,j]
                 viable = np.logical_and(u<=cdf, unassigned)
-                n[j] = viable.sum()
+
+                # Accumulate the weight toward the jth state. This is either 
+                # proportional to the number of displacements corresponding to 
+                # trajectories that have been assigned this state (if weight_by_number_of_disps
+                # is True), or simply to the number of trajectories corresponding
+                # to this state (if weight_by_number_of_disps is False).
+                if mode == "by_displacement":
+                    n[j] = n_disps[viable].sum()
+                else:
+                    n[j] = viable.sum()
                 unassigned[viable] = False
-            n[-1] += unassigned.sum()
+
+            # Whatever trajectories remain (perhaps due to floating point error), throw into the last bin
+            if mode == "by_displacement":
+                n[-1] += track_lengths[viable].sum()
+            else:
+                n[-1] += unassigned.sum()
 
             # Determine the posterior distribution over the state occupations
             posterior = prior + n 

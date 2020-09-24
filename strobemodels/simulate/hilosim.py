@@ -16,7 +16,10 @@ import os
 import numpy as np 
 import pandas as pd 
 
-from strobemodels.simulate.simutils import tracks_to_dataframe
+from strobemodels.simulate.simutils import (
+    tracks_to_dataframe,
+    tracks_to_dataframe_gapped
+)
 from strobemodels.simulate import fbm 
 from strobemodels.simulate import levy
 from strobemodels.utils import concat_tracks 
@@ -114,6 +117,231 @@ def strobe_infinite_plane(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_ou
         return tracks_to_dataframe(tracks, kill_nan=True)
     else:
         return tracks 
+
+def strobe_nucleus(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=True,
+    n_gaps=0, nucleus_radius=5.0, bleach_prob_per_frame=0):
+    """
+    Simulate 3D trajectories that are photoactivated at any point in a spherical
+    "nucleus" and diffuse around for some number of frames. if *return_dataframe*
+    is *True*, then these trajectories are only observed when they lie within a 
+    thin slice of thickness *dz* that bisects the nucleus.
+
+    args
+    ----
+        model_obj       :   either a FractionalBrownianMotion3D or LevyFlight3D
+                            object, the simulator
+        n_tracks        :   int, the number of trajectories to simulate
+        dz              :   float, the thickness of the observation plane in um
+        loc_error       :   float, standard deviation of normally distributed 1D
+                            localization error in um
+        exclude_outside :   bool, exclude localizations that lie outside of the detectable
+                            z interval (-dz/2, dz/2). If False, the whole trajectories
+                            are returned.
+        n_gaps          :   int, the number of gap frames to tolerate in trajectories before
+                            dropping them. Only applies if *exclude_outside* is True.
+        nucleus_radius  :   float, radius of the nucleus in um. Trajectories are 
+                            not allowed to cross nuclear boundaries.
+
+    returns
+    -------
+        pandas.DataFrame with columns ["trajectory", "frame", "z", "y", "x"]
+
+    """
+    # Half the observation slice width
+    hz = dz * 0.5
+
+    # Nucleus diameter
+    diameter = nucleus_radius * 2
+
+    # Simulate some 3D trajectories, which start at the origin
+    tracks = model_obj(n_tracks)
+
+
+    ## STARTING POSITIONS: choose random starting positions inside a sphere of 
+    # radius *nucleus_radius*
+
+    # Angle relative to origin, sampled using the Gaussian method
+    start_pos_ang = np.random.normal(size=(n_tracks, 3))
+    start_pos_ang = (start_pos_ang.T / np.sqrt((start_pos_ang**2).sum(axis=1))).T 
+
+    # Radial distance from origin
+    start_pos_rad = nucleus_radius * np.cbrt(np.random.random(size=n_tracks))
+
+    # Starting positions
+    start_pos = (start_pos_ang.T * start_pos_rad).T 
+
+    # Offset each trajectory by the starting position
+    for dim in range(3):
+        tracks[:,:,dim] = (tracks[:,:,dim].T + start_pos[:,dim]).T 
+
+
+    ## SPECULAR REFLECTIONS: deal with trajectories that cross the nuclear boundary
+    # by reflecting back into the nucleus
+    for frame_idx in range(tracks.shape[1]):
+
+        # Determine the set of points that are outside the nucleus at this time
+        distance_from_origin = np.sqrt((tracks[:,frame_idx,:]**2).sum(axis=1))
+        outside = distance_from_origin > nucleus_radius 
+
+        # Get the closest point on the sphere to each of these points
+        reflect_points = nucleus_radius * (tracks[outside,frame_idx,:].T / distance_from_origin[outside]).T
+
+        # Reflect the trajectories back into the nucleus for each subsequent frame
+        for g in range(frame_idx, tracks.shape[1]):
+            tracks[outside, g, :] = 2 * reflect_points - tracks[outside, g, :]
+
+
+    ## DEFOCALIZATION: exclude molecules outside of the slice from observation
+    # by setting their values to NaN. Some of these molecules may subsequently
+    # reenter and not be lost, if the number of gaps tolerated during tracking
+    # is greater than 0
+    if exclude_outside:
+
+        gap_count = np.zeros(n_tracks, dtype=np.int64)
+        dead = np.zeros(n_tracks, dtype=np.bool)
+
+        for t in range(tracks.shape[1]):
+
+            # Get the set of localizations that lie outside the focal plane
+            # at this frame interval
+            outside = np.abs(tracks[:,t,0]) > hz 
+
+            # For the trajectories corresponding to those localizations, 
+            # increment their blink counters by 1
+            gap_count[outside] += 1
+
+            # For trajectories inside the focal volume, set the blink counter
+            # to 0
+            gap_count[~outside] = 0
+
+            # Kill trajectories that have been outside the focal volume for 
+            # longer than the tolerated number of gap frames
+            dead = np.logical_or(dead, gap_count > n_gaps)
+
+            # Set localizations that are not observed to NaN
+            set_nan = np.logical_or(outside, dead)
+            for d in range(3):
+                tracks[:,t,d][set_nan] = np.nan 
+
+
+    ## BLEACHING: stochastically and permanently bleach molecules. The bleaching
+    # rate is assumed to be the same throughout the nucleus and is stationary
+    # in time.
+    if bleach_prob_per_frame > 0:
+
+        bleached = np.zeros(tracks.shape[0], dtype=np.bool)
+
+        for t in range(tracks.shape[1]):
+            b = np.random.random(size=tracks.shape[0]) <= bleach_prob_per_frame
+            bleached = np.logical_or(bleached, b)
+            for d in range(3):
+                tracks[:,t,d][bleached] = np.nan 
+
+
+    ## LOCALIZATION ERROR: add normally-distributed localization error to 
+    # each localization
+    if loc_error != 0.0:
+        tracks = tracks + np.random.normal(scale=loc_error, size=tracks.shape)
+
+
+    # Format as a pandas.DataFrame
+    return tracks_to_dataframe_gapped(tracks, n_gaps=n_gaps)
+
+def strobe_multistate_nucleus(model, n_tracks,  model_diffusivities,
+    model_occupations, track_len=10, dz=0.7, frame_interval=0.01, loc_error=0.0,
+    exclude_outside=True, n_gaps=0, nucleus_radius=5.0, bleach_prob_per_frame=0,
+    n_rounds=1, **model_kwargs):
+    """
+    Simulate multiple diffusing states inside a sphere ("nucleus"). These 
+    are subject to the following:
+
+        - specular reflections at the boundaries of the sphere
+
+        - if *exclude_outside* is True, then only localizations than lie
+          within a focal depth of *dz* at the center of the sphere are 
+          observed
+
+        - also if *exclude_outside* is True, then "defocalized" trajectories
+          may reenter the focal volume on subsequent frames to contribute
+          additional localizations. In those cases, the reentrant trajectories
+          are counted as part of the original trajectories only if their 
+          transit outside the focal frame has length equal to or less than 
+          *n_gaps*. Otherwise, they are counted as separate trajectories.
+
+        - if *bleach_prob_per_frame* is greater than 0, then trajectories
+          will be bleached at a constant rate (for all diffusivities). When
+          trajectories are bleached, they are permanently lost and are not
+          counted for subsequent frames
+
+    Note that trajectories may not be counted at all (because they never 
+    transit through the focal volume) or may be counted multiple times (because
+    they transit multiple times through the focal volume).
+
+    args
+    ----
+        model               :   str, "brownian", "fbm", or "levy"
+        n_tracks            :   int, the number of trajectories to simulate. 
+                                Note that trajectories may not be counted at all
+                                or be counted multiple times, depending on how they
+                                transit through the focal volume
+        model_diffusivities :   1D ndarray, the diffusivities for each state 
+                                in um^2 s^-1
+        model_occupations   :   1D ndarray, the fractional occupations of each state.
+                                Must sum to 1.0.
+        track_len           :   int, the number of frames to simulate per trajectory
+                                (before defocalization/bleaching)
+        dz                  :   float, focal depth in um
+        frame_interval      :   float, the frame interval in seconds
+        loc_error           :   float, 1D normally distributed localization error
+                                in um
+        exclude_outside     :   bool. If False, then no defocalization is performed
+                                and trajectories may be detected at any point in 
+                                the nucleus
+        n_gaps              :   int, the number of gaps to tolerate before dropping
+                                a trajectory
+        nucleus_radius      :   float, radius of the spherical nucleus in um
+        bleach_prob_per_frame:  float, the probability for a trajectory to bleach
+                                on any given frame, assumed to be the same for all
+                                diffusivities
+        n_rounds            :   int, the number of rounds to repeat this simulation.
+                                Sometimes helpful if a large number of trajectories
+                                are needed. The results are concatenated as a single
+                                pandas.DataFrame.
+        model_kwargs        :   any additional keyword arguments to the model
+                                simulator
+
+    returns
+    -------
+        pandas.DataFrame with columns "trajectory", "frame", "z", "y", and "x"
+
+    """
+    results = []
+    for round_idx in range(n_rounds):
+
+        # Choose the number of trajectories in each diffusive state
+        n_occ = np.random.multinomial(n_tracks, model_occupations)
+
+        # Simulate the states
+        tracks = []
+        for i, D in enumerate(model_diffusivities):
+            model_obj = DIFFUSION_MODELS[model](D=D, dt=frame_interval, track_len=track_len, **model_kwargs)
+            tracks_state = strobe_nucleus(model_obj, n_occ[i], dz=dz, loc_error=loc_error,
+                exclude_outside=exclude_outside, n_gaps=n_gaps, nucleus_radius=nucleus_radius,
+                bleach_prob_per_frame=bleach_prob_per_frame)
+            tracks.append(tracks_state)
+
+        # Concatenate trajectories from both states
+        if isinstance(tracks[0], pd.DataFrame):
+            tracks = concat_tracks(*tracks)
+        else:
+            tracks = np.concatenate(tracks, axis=0)
+
+        results.append(tracks)
+
+    if n_rounds > 1:
+        return concat_tracks(*results)
+    else:
+        return results[0]
 
 def strobe_multistate_infinite_plane(model, n_tracks, model_diffusivities,
     model_occupations, track_len=10, dz=0.7, frame_interval=0.01, loc_error=0.0,
