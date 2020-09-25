@@ -228,7 +228,10 @@ def strobe_nucleus(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=T
 
 
     # Format as a pandas.DataFrame
-    return tracks_to_dataframe_gapped(tracks, n_gaps=n_gaps)
+    if len(tracks) == 0:
+        return pd.DataFrame([])
+    else:
+        return tracks_to_dataframe_gapped(tracks, n_gaps=n_gaps)
 
 def strobe_multistate_nucleus(model, n_tracks,  model_diffusivities,
     model_occupations, track_len=10, dz=0.7, frame_interval=0.01, loc_error=0.0,
@@ -298,6 +301,14 @@ def strobe_multistate_nucleus(model, n_tracks,  model_diffusivities,
         pandas.DataFrame with columns "trajectory", "frame", "z", "y", and "x"
 
     """
+    # Only consider states with nonzero occupations
+    model_occupations = np.asarray(model_occupations).copy()
+    model_diffusivities = np.asarray(model_diffusivities).copy()
+    nonzero = model_occupations > 0
+    model_occupations = model_occupations[nonzero]
+    model_diffusivities = model_diffusivities[nonzero]
+
+    # Run the simulation for each of the remaining diffusivities
     results = []
     for round_idx in range(n_rounds):
 

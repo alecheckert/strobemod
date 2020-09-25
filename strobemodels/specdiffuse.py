@@ -234,7 +234,7 @@ def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupation
     return L 
 
 def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
-    frame_interval=0.01, loc_error=0.0, n_frames=4):
+    frame_interval=0.01, loc_error=0.0, n_frames=4, jump_cap_likelihood=10):
     """
     Given a set of trajectories, evaluate the likelihood of each of a set
     of diffusivities, given each trajectory.
@@ -256,6 +256,12 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
         loc_error       :   float, 1D localization error in um
         n_frames        :   int, the number of displacements from each 
                             trajectory to consider
+        jump_cap_likelihood :   int, the maximum number of jumps to consider
+                            from each trajectory for calculating the likelihood
+                            of each diffusing state. The purpose of this is 
+                            to prevent overflow errors when calculating 
+                            the likelihoods of diffusivities for very long 
+                            trajectories.
 
     returns
     -------
@@ -270,23 +276,36 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
         state_biases = np.ones((n_frames, n_states), dtype=np.float64)
 
     # Evaluate the naive likelihood of each observed 2D squared jump,
-    # given each of the distinct diffusivities. The likelihood is "naive"
-    # in the sense that it does not incorporate any biases resulting from
-    # defocalization
+    # given each of the distinct diffusivities. This initial likelihood is
+    # "naive" in the sense that it does not incorporate any biases resulting
+    # from defocalization
     L_cond = np.zeros((vecs.shape[0], n_states), dtype=np.float64)
     for j, D in enumerate(diffusivities):
         sig2 = 2 * (D * frame_interval + loc_error ** 2)
         L_cond[:,j] = np.exp(-vecs[:,4] / (2 * sig2)) / (2 * sig2)
 
-    # Evaluate the likelihood of each trajectory given each diffusivity,
-    # incorporating the biases
+    # Formulate the naive likelihoods as a pandas.DataFrame. The following
+    # few steps are kind of an obtuse but very fast way to calculate the 
+    # likelihoods of each trajectory, given each diffusivity. The likelihood
+    # of a trajectory is the product of the likelihoods of each jump, for a
+    # Markov process
     L_cond = pd.DataFrame(L_cond, columns=diffusivities)
     L_cond["trajectory"] = vecs[:,5]
     L_cond["track_length"] = vecs[:,0].astype(np.int64)
     L = np.zeros((n_tracks, n_states), dtype=np.float64)
+    L_cond["f_remain"] = L_cond["track_length"].map({i+2: state_biases[i,j] \
+        for i in range(n_frames)})   
+
+    # Only consider the first few jumps to calculate the diffusivity likelihoods,
+    # to prevent overflow errors when multiplying large numbers of likelihoods.
+    # Note that this generally reduces the amount of information available for
+    # inferring the diffusivities.
+    L_cond["ones"] = 1 
+    L_cond["index_in_track"] = L_cond.groupby("trajectory")["ones"].cumsum()
+    L_cond = L_cond[L_cond["index_in_track"] <= jump_cap_likelihood]
+
+    # Evaluate the likelihood of each trajectory given each diffusivity
     for j, D in enumerate(diffusivities):
-        L_cond["f_remain"] = L_cond["track_length"].map({i+2: state_biases[i,j] \
-            for i in range(n_frames)})
         L[:,j] = np.asarray(L_cond.groupby("trajectory")[D].prod() * \
             L_cond.groupby("trajectory")["f_remain"].first())
 
@@ -476,10 +495,10 @@ def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
     return p 
 
 def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
-    n_frames=4, frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0,
-    dz=np.inf, verbose=True, pseudocounts=1, n_threads=1, 
-    track_diffusivities_out_csv=None, mode="by_displacement",
-    disable_track_length_weighting=False):
+    use_entire_track=True, max_jumps_per_track=50, frame_interval=0.01,
+    loc_error=0.0, pixel_size_um=1.0, dz=np.inf, verbose=True, pseudocounts=1,
+    n_threads=1, track_diffusivities_out_csv=None, mode="by_displacement",
+    defoc_corr="first_only"):
     """
     Use Gibbs sampling to estimate the posterior distribution of the 
     state occupations for a multistate Brownian motion with no state
@@ -501,8 +520,11 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         n_iter          :   int, the number of iterations to do
         burnin          :   int, the number of iterations to ignore at the
                             beginning
-        n_frames        ;   int, the number of frames from each trajectory
-                            to consider
+        use_entire_track:   bool, use every displacement from every trajectory
+                            for state occupation estimation
+        max_jumps_per_track :   int, the maximum number of displacements to 
+                            consider from each trajectory if *use_entire_track*
+                            is False.
         frame_interval  :   float, the frame interval in seconds
         loc_error       :   float, the localization error in um
         pixel_size_um   :   float, the size of pixels in um
@@ -522,11 +544,28 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
                             by trajectory and each column corresponds to the 
                             mean posterior weight of a given diffusivity
                             for that trajectory.
-        weight_by_number_of_disps   :   bool. If True, each trajectory contributes
-                            a weight to the parameter estimate that is equal 
-                            to the number of displacements that are being 
-                            considered from that trajectory. Otherwise, the 
-                            weights of every trajectory are the same.
+        defoc_corr      :   str, the type of defocalization correction to use
+                            when weighting the diffusivity likelihoods. Either
+                            "first_only", "by_length", or "none".
+
+                            If "first_only", then the likelihood of a particular
+                            diffusive state given some trajectory T is assumed 
+                            to be proportional only to the probability of seeing
+                            the first displacement from that trajectory.
+
+                            If "by_length", then the likelihood of a particular
+                            diffusive state given some trajectory T is assumed
+                            to be proportional to the probability of seeing a 
+                            trajectory of that length, given that diffusive state.
+
+                            If "none", then the likelihood of each diffusive state
+                            is assumed to depend only on the jumps themselves, not
+                            on the trajectory length.
+
+                            Note that we still correct for state occupation corrections
+                            due to underobservation bias at the end, regardless of 
+                            the value of *defoc_corr*. *defoc_corr* only affects the
+                            estimation during the actual Gibbs sampling routine.
 
     returns
     -------
@@ -547,36 +586,70 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         assert prior.shape == diffusivities.shape, "prior must have the same " \
             "number of diffusing states as diffusivities"
 
+    # If using the entire track, set the number of frame intervals to 
+    # consider to the maximum observed in the dataset
+    if use_entire_track:
+        tracks = track_length(tracks)
+        n_frames = tracks["track_length"].max()
+    else:
+        n_frames = max_jumps_per_track 
+
     # Calculate squared radial displacements
     vecs, n_tracks = rad_disp_squared(tracks, start_frame=None, n_frames=n_frames,
         pixel_size_um=pixel_size_um)
 
-    # Relative probability of detection at each frame interval
-    f_remain_one_interval = np.zeros(K, dtype=np.float64)
+    # Probability to observe a single jump from each diffusive state in 
+    # this focal volume, assuming the jump starts from a point that is 
+    # chosen randomly from inside the focal volume
+    f_remain_one_interval = np.empty(K, dtype=np.float64)
     for j, D in enumerate(diffusivities):
-        f_remain_one_interval[j] = defoc_prob_brownian(D, 1,
-            frame_interval=frame_interval, dz=dz, n_gaps=0)
-    F_remain = np.ones((n_frames, K), dtype=np.float64)
-    for t in range(n_frames):
-        F_remain[t,:] = f_remain_one_interval 
+        f_remain_one_interval[j] = defoc_prob_brownian(D, 1, 
+            frame_interval=frame_interval, dz=dz, n_gaps=0)[0]
 
-    # Include track length in the consideration of the diffusivity 
-    # likelihoods for each trajectory
-    if not disable_track_length_weighting:
+    # State bias terms to use during Gibbs sampling. These reflect the 
+    # idea that, if we have a trajectory under which two different diffusivities
+    # have the same naive likelihood (considering only the magnitudes of each
+    # displacement), then the one with the lower diffusivity is actually more
+    # likely because there is a higher chance that it is observed before
+    # defocalization.
+    F_remain = np.empty((n_frames, K), dtype=np.float64)
+    if defoc_corr == "none" or (dz is np.inf):
+
+        # The likelihood of each diffusive state given a particular trajectory
+        # is not assumed to depend at all on the trajectory length
+        F_remain[:] = 1.0 / K 
+
+    elif defoc_corr == "first_only":
+
+        # Here, F_remain[i,j] is the probability that we observe a displacement
+        # from diffusivity j, regardless of the identity of the trajectory i
+        for j in range(K):
+            F_remain[:,j] = f_remain_one_interval[j] / f_remain_one_interval.sum()
+
+    elif defoc_corr == "by_length":
+
+        # Here, element F[i,j] is the relative probability that at least 
+        # *i+1* frames are observed for diffusivity *j*
         for j, D in enumerate(diffusivities):
             F_remain[:,j] = defoc_prob_brownian(D, n_frames,
                 frame_interval=frame_interval, dz=dz, n_gaps=0)
-        F_remain[:-1,:] -= F_remain[1:,:]
-        F_remain = F_remain / F_remain.sum(axis=0)
+
+        # Normalize over diffusivities. As a result, if we had an equal
+        # fraction of trajectories that start with each diffusivity at 
+        # random points in the focal volume, then F[i,j] gives the fraction
+        # of trajectories with diffusivity j after i+1 frames
+        F_remain = (F_remain.T / F_remain.sum(axis=1)).T 
 
     # Evaluate the likelihood of each trajectory given each diffusive state.
-    # The result, *L[i,j]*, gives the likelihood to observe trajectory i under
-    # diffusive state j.
+    # The result, *L[i,j]*, gives the likelihood of diffusivity j given 
+    # trajectory i, and is proportional to the probability to observe trajectory
+    # i given diffusivity j
     L, track_indices, track_lengths = evaluate_diffusivity_likelihood(vecs,
         diffusivities, state_biases=F_remain, frame_interval=frame_interval,
         loc_error=loc_error, n_frames=n_frames)
 
-    # The number of displacements corresponding to each trajectory
+    # The number of displacements corresponding to each trajectory, which is 
+    # the statistical weight of each trajectory toward state vector estimation
     n_disps = track_lengths - 1
 
     assert len(track_indices) == n_tracks
@@ -610,7 +683,8 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         viable = np.zeros(n_tracks, dtype=np.bool)
 
         # The total counts of each state in the state occupation vector
-        n = np.zeros(K, dtype=np.int64)
+        # n = np.zeros(K, dtype=np.int64)
+        n = np.zeros(K, dtype=np.float64)
 
         # Sampling loop
         for iter_idx in range(n_iter):
@@ -644,7 +718,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
 
             # Whatever trajectories remain (perhaps due to floating point error), throw into the last bin
             if mode == "by_displacement":
-                n[-1] += track_lengths[unassigned].sum()
+                n[-1] += n_disps[unassigned].sum()
             else:
                 n[-1] += unassigned.sum()
 
@@ -660,8 +734,8 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
                 mean_p += p
 
             if verbose and iter_idx % 10 == 0:
-                sys.stdout.write("Finished with %d/%d iterations..." % (iter_idx, n_iter))
-                # print("Finished with %d/%d iterations..." % (iter_idx, n_iter))
+                sys.stdout.write("Finished with %d/%d iterations...\r" % (iter_idx, n_iter))
+                sys.stdout.flush()
 
         mean_p /= (n_iter - burnin)
         return mean_p 
@@ -690,7 +764,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
 
         # Calculate the probability of each diffusive state, given each trajectory
         # and the posterior model distribution of diffusivities
-        T = np.array(L) * posterior_means 
+        T = L * posterior_means 
         T = (T.T / T.sum(axis=1)).T 
 
         # Format as a pandas.DataFrame
