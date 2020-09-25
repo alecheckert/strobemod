@@ -313,7 +313,8 @@ def track_array(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16):
     """
     raise NotImplementedError
 
-def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16, first_only=True):
+def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16,
+    use_entire_track=False, max_jumps_per_track=10):
     """
     Calculate all of the radial displacements in the XY plane for a set of
     trajectories, returning the raw displacements as an ndarray.
@@ -329,8 +330,10 @@ def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16, fir
                             consider
         frame_interval  :   float, the interval in seconds between frames
         pixel_size_um   :   float, the size of individual pixels in um
-        first_only      :   bool, only consider displacements relative to the 
-                            first localization of each track   
+        use_entire_track:   bool. Use all displacements from every trajectory.
+        max_jumps_per_track :   int, the maximum number of displacements to 
+                                include from each trajectory, if *use_entire_track*
+                                is *False*
 
     returns
     -------
@@ -355,17 +358,8 @@ def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16, fir
         np.logical_and(tracks["trajectory"]>=0, tracks["track_length"]>1)
     ][["frame", "trajectory", "y", "x"]]
 
-    # Assign each localization an index in the respective track 
-    T["ones"] = np.ones(len(T), dtype=np.int64)
-    T["index_in_track"] = T.groupby("trajectory")["ones"].cumsum()
-    T = T.drop("ones", axis=1)
-
-    # Put a handle on the first localization of each track 
-    T["first_in_track"] = np.zeros(len(T), dtype="uint8")
-    T.loc[T["index_in_track"]==1, "first_in_track"] = 1
-
     # Convert to ndarray for speed
-    T = np.asarray(T[["frame", "trajectory", "y", "x", "first_in_track"]])
+    T = np.asarray(T[["frame", "trajectory", "y", "x", "trajectory"]])
 
     # Sort first by track, then by frame
     T = T[np.lexsort((T[:,0], T[:,1])), :]
@@ -379,15 +373,21 @@ def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16, fir
     for t in range(1, n_frames+1):
         diff = T[t:,:] - T[:-t,:]
 
+        # Map trajectory indices back to the first localization of each trajectory
+        diff[:,4] = T[t:,1]
+
         # Only consider vectors between points originating in the same track
         diff = diff[diff[:,1] == 0.0, :]
 
         # Only consider vectors that match the delay being considered
         diff = diff[diff[:,0] == t, :]
 
-        # Only consider vectors relative to the first localization in that track
-        if first_only:
-            diff = diff[diff[:,4] == -1, :]
+        # Only consider a finite number of displacements from each trajectory
+        if not use_entire_track:
+            _df = pd.DataFrame(diff[:,4], columns=["traj"])
+            _df["ones"] = 1
+            _df["index_in_track"] = _df.groupby("traj")["ones"].cumsum()
+            diff = diff[np.asarray(_df["index_in_track"]) <= max_jumps_per_track, :]
 
         # Calculate radial displacements
         result_t = np.empty((diff.shape[0], 2), dtype=np.float64)
@@ -399,7 +399,8 @@ def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16, fir
     return np.concatenate(result, axis=0)
 
 def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, 
-    max_jump=5.0, pixel_size_um=0.160, first_only=True, n_gaps=0):
+    max_jump=5.0, pixel_size_um=0.160, n_gaps=0, use_entire_track=False,
+    max_jumps_per_track=10):
     """
     Compile a histogram of radial displacements in the XY plane for 
     a set of trajectories ("tracks").
@@ -417,9 +418,11 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
         max_jump        :   float, the max radial displacement to consider in 
                             um
         pixel_size_um   :   float, the size of individual pixels in um
-        first_only      :   bool, only consider displacements relative to the 
-                            first localization of each track
         n_gaps          :   int, the number of gaps allowed during tracking
+        use_entire_track:   bool, use every displacement in the dataset
+        max_jumps_per_track:   int, the maximum number of displacements
+                            to consider per trajectory. Ignored if 
+                            *use_entire_track* is *True*.
 
     returns
     -------
@@ -442,17 +445,8 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
         np.logical_and(tracks["trajectory"]>=0, tracks["track_length"]>1)
     ][["frame", "trajectory", "y", "x"]]
 
-    # Assign each localization an index in the respective track 
-    T["ones"] = np.ones(len(T), dtype=np.int64)
-    T["index_in_track"] = T.groupby("trajectory")["ones"].cumsum()
-    T = T.drop("ones", axis=1)
-
-    # Put a handle on the first localization of each track 
-    T["first_in_track"] = np.zeros(len(T), dtype="uint8")
-    T.loc[T["index_in_track"]==1, "first_in_track"] = 1
-
     # Convert to ndarray for speed
-    T = np.asarray(T[["frame", "trajectory", "y", "x", "first_in_track"]]).astype(np.float64)
+    T = np.asarray(T[["frame", "trajectory", "y", "x", "trajectory"]]).astype(np.float64)
 
     # Sort first by track, then by frame
     T = T[np.lexsort((T[:,0], T[:,1])), :]
@@ -471,22 +465,31 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
         # The maximum trajectory length, including gap frames
         max_len = (n_gaps + 1) * n_frames + 1
 
-        # Consider every shift up to the maximum trajectory length 
+        # Consider every shift up to the maximum trajectory length
         for l in range(1, max_len+1):
+
+            # Compute the displacement for all possible jumps
             diff = T[l:,:] - T[:-l,:]
+
+            # Map the trajectory index corresponding to the first point in 
+            # each trajectory
+            diff[:,4] = T[l:,1]
 
             # Only consider vectors between points originating from the same track
             diff = diff[diff[:,1] == 0.0, :]
-
-            # Only consider vectors relative to the first localization in each track
-            if first_only:
-                diff = diff[diff[:,4] == -1, :]
 
             # Look for jumps corresponding to each frame interval being considered
             for t in range(1, n_frames+1):
 
                 # Find vectors that match the delay being considered
                 subdiff = diff[diff[:,0] == t, :]
+
+                # Only consider a finite number of displacements from each trajectory
+                if not use_entire_track:
+                    _df = pd.DataFrame(subdiff[:,4], columns=["traj"])
+                    _df["ones"] = 1
+                    _df["index_in_track"] = _df.groupby("traj")["ones"].cumsum() 
+                    subdiff = subdiff[np.asarray(_df["index_in_track"]) <= max_jumps_per_track, :]
 
                 # Calculate radial displacements
                 r_disps = np.sqrt((subdiff[:,2:4]**2).sum(axis=1))
@@ -499,15 +502,21 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
         for t in range(1, n_frames+1):
             diff = T[t:,:] - T[:-t,:]
 
+            # Map trajectory indices back to the first localization of each trajectory
+            diff[:,4] = T[t:,1]
+
             # Only consider vectors between points originating in the same track
             diff = diff[diff[:,1] == 0.0, :]
 
             # Only consider vectors that match the delay being considered
             diff = diff[diff[:,0] == t, :]
 
-            # Only consider vectors relative to the first localization in that track
-            if first_only:
-                diff = diff[diff[:,4] == -1, :]
+            # Only consider a finite number of displacements from each trajectory
+            if not use_entire_track:
+                _df = pd.DataFrame(diff[:,4], columns=["traj"])
+                _df["ones"] = 1
+                _df["index_in_track"] = _df.groupby("traj")["ones"].cumsum()
+                diff = diff[np.asarray(_df["index_in_track"]) <= max_jumps_per_track, :]
 
             # Calculate radial displacements
             r_disps = np.sqrt((diff[:,2:4]**2).sum(axis=1))
@@ -516,7 +525,8 @@ def rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001,
     return H, bin_edges 
 
 def rad_disp_histogram_3d(tracks, n_frames=4, bin_size=0.001, 
-    max_jump=5.0, pixel_size_um=0.160, first_only=True):
+    max_jump=5.0, pixel_size_um=0.160, use_entire_track=True, 
+    max_jumps_per_track=10):
     """
     Compile a histogram of 3D radial displacements for a set of
     trajectories ("tracks").
@@ -534,8 +544,11 @@ def rad_disp_histogram_3d(tracks, n_frames=4, bin_size=0.001,
         max_jump        :   float, the max radial displacement to consider in 
                             um
         pixel_size_um   :   float, the size of individual pixels in um
-        first_only      :   bool, only consider displacements relative to the 
-                            first localization of each track
+        use_entire_track:   bool, use every displacement in every trajectory
+                            in the dataset
+        max_jumps_per_track:   int, the maximum number of displacements
+                            to consider per trajectory if *use_entire_track*
+                            is *False*.
 
     returns
     -------
@@ -555,17 +568,8 @@ def rad_disp_histogram_3d(tracks, n_frames=4, bin_size=0.001,
         np.logical_and(tracks["trajectory"]>=0, tracks["track_length"]>1)
     ][["frame", "trajectory", "z", "y", "x"]]
 
-    # Assign each localization an index in the respective track 
-    T["ones"] = np.ones(len(T), dtype=np.int64)
-    T["index_in_track"] = T.groupby("trajectory")["ones"].cumsum()
-    T = T.drop("ones", axis=1)
-
-    # Put a handle on the first localization of each track 
-    T["first_in_track"] = np.zeros(len(T), dtype="uint8")
-    T.loc[T["index_in_track"]==1, "first_in_track"] = 1
-
     # Convert to ndarray for speed
-    T = np.asarray(T[["frame", "trajectory", "z", "y", "x", "first_in_track"]])
+    T = np.asarray(T[["frame", "trajectory", "z", "y", "x", "trajectory"]])
 
     # Sort first by track, then by frame
     T = T[np.lexsort((T[:,0], T[:,1])), :]
@@ -582,15 +586,22 @@ def rad_disp_histogram_3d(tracks, n_frames=4, bin_size=0.001,
     for t in range(1, n_frames+1):
         diff = T[t:,:] - T[:-t,:]
 
+        # Map trajectory indices back to the first localization of each displacement
+        diff[:,5] = T[:-t,1]
+
         # Only consider vectors between points originating in the same track
         diff = diff[diff[:,1] == 0.0, :]
 
-        # Only consider vectorss that match the delay being considered
+        # Only consider vectors that match the delay being considered
         diff = diff[diff[:,0] == t, :]
 
-        # Only consider vectors relative to the first localization in that track
-        if first_only:
-            diff = diff[diff[:,5] == -1, :]
+        # Only consider a finite number of displacements from each trajectory
+        if not use_entire_track:
+
+            _df = pd.DataFrame(diff[:,5], columns=["traj"])
+            _df["ones"] = 1
+            _df["index_in_track"] = _df.groupby("traj")["ones"].cumsum()
+            diff = diff[np.asarray(_df["index_in_track"]) <= max_jumps_per_track, :]
 
         # Calculate radial displacements
         r_disps = np.sqrt((diff[:,2:5]**2).sum(axis=1))

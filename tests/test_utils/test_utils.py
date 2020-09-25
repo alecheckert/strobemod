@@ -69,7 +69,7 @@ class TestCoarsenHistogram(unittest.TestCase):
 
         # Accumulate a jump length histogram
         H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4,
-            bin_size=0.001, max_jump=5.0, pixel_size_um=1.0, first_only=True)
+            bin_size=0.001, max_jump=5.0, pixel_size_um=1.0, use_entire_track=True)
 
         # Run aggregation, with 20 bins in the old histogram to 1 bin in the 
         # new one
@@ -146,9 +146,9 @@ class TestTrackTools(unittest.TestCase):
         tracks["x"] =          np.array([0.0, 0.0, -1.0, -1.0, 0.2, 0.0, 0.2, 2.7, 1.5, 1.4995])
 
         # Check that we get the right displacements
-        print("\tchecking numerical correctness...")
+        print("\tchecking numerical correctness with only the first displacement...")
         result = utils.rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=1.0,
-            first_only=True)
+            use_entire_track=False, max_jumps_per_track=1)
         assert (result[:,1] == 0.01).sum() == 3
         assert (result[:,1] == 0.02).sum() == 2
         assert (result[:,1] == 0.03).sum() == 1
@@ -181,9 +181,9 @@ class TestTrackTools(unittest.TestCase):
         tracks["x"] =          np.array([0.0, 0.0, -1.0, -1.0, 0.2, 0.0, 0.2, 2.7, 1.5, 1.4995])
 
         # Check for numerical correctness
-        print("\tchecking numerical correctness...")
+        print("\tchecking numerical correctness (only one jump from each track)...")
         H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
-            pixel_size_um=1.0, first_only=True)
+            pixel_size_um=1.0, use_entire_track=False, max_jumps_per_track=1)
 
         # Check the first frame interval
         assert H[0,:].sum() == 3
@@ -209,7 +209,7 @@ class TestTrackTools(unittest.TestCase):
         # Check that when using all displacements we get the right answer
         print("\tchecking numerical correctness when all displacements from each track are included...")
         H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
-            pixel_size_um=1.0, first_only=False)
+            pixel_size_um=1.0, use_entire_track=True)
         assert H[0,0] == 1
         assert H[0,282] == 2
         assert H[0,1000] == 2 
@@ -219,26 +219,185 @@ class TestTrackTools(unittest.TestCase):
         # Check that it acts sensibly when handed empty dataframes
         print("\tstability test: handing it empty dataframes...")
         H, bin_edges = utils.rad_disp_histogram_2d(tracks[:0], n_frames=4, bin_size=0.001, max_jump=5.0,
-            pixel_size_um=1.0, first_only=False)
+            pixel_size_um=1.0, use_entire_track=True)
         assert H.shape == (4, 5000)
         assert H.sum() == 0
 
         # Checks that it acts sensibly when handed jump lengths that exceed the maximum
         # jump length bin
-        print("\tstability test: handing it tracks with very large jumps...")
+        print("\tstability test: handing it tracks with very large jumps (only 1 jump per track)...")
         tracks = pd.DataFrame(index=np.arange(10), columns=["y", "x", "trajectory", "frame"])
         tracks["trajectory"] = np.array([0,     0,    0,    0,   1,   1,   1,   2,   3,      3])
         tracks["frame"] =      np.array([0,     1,    2,    3,   0,   1,   2,   5,   6,      7])
         tracks["y"] =          np.array([0.0, 1.0e3,  1.0,  1.5, 0.0, 0.2, 0.0, 1.0, 1.5, 1.5000])
         tracks["x"] =          np.array([0.0, 0.0, -1.0, -1.0, 0.2, 0.0, 0.2, 2.7, 1.5, 1.4995])
         H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
-            pixel_size_um=1.0, first_only=True)
+            pixel_size_um=1.0, use_entire_track=False, max_jumps_per_track=1)
         assert H.shape == (4, 5000)
         assert H.sum() == 5
         assert H[0,:].sum() == 2
         H[0,0] == 1
         H[0,282] == 1
         assert (H[0,~(np.isin(np.arange(5000), np.array([0, 282])))] == 0).all()
+
+        # Use the first two displacements from each track
+        print("\tchecking that we can limit the histogram to the first two displacements from each track...")
+
+        # Case 1 (simpler, just two trajectories)
+        tracks = pd.DataFrame(index=np.arange(7), columns=["y", "x", "trajectory", "frame"])
+        tracks["trajectory"] = [0, 0, 0, 0, 1, 1, 1]
+        tracks["frame"]      = [0, 1, 2, 3, 4, 5, 6]
+        tracks["y"]          = [0, 0.5e-3, 1.5e-3, 3.0e-3, 5.0e-3, 7.5e-3, 10.5e-3]
+        tracks["x"]          =  0
+
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
+            pixel_size_um=1.0, use_entire_track=False, max_jumps_per_track=1, n_gaps=0)
+
+        assert H[0,:].sum() == 2
+        assert H[1,:].sum() == 2
+        assert H[2,:].sum() == 1
+        assert H[3,:].sum() == 0
+
+        assert H[0,0] == 1   # 0 to 1 nm
+        assert H[0,1] == 0   # 1 to 2 nm
+        assert H[0,2] == 1   # 2 to 3 nm
+        assert (H[0,3:] == 0).all()
+        assert H[1,0] == 0   # 0 to 1 nm
+        assert H[1,1] == 1   # 1 to 2 nm
+        assert H[1,2] == 0   # 2 to 3 nm
+        assert H[1,3] == 0   # 3 to 4 nm
+        assert H[1,4] == 0   # 4 to 5 nm
+        assert H[1,5] == 1   # 5 to 6 nm
+        assert (H[1,6:] == 0).all()
+        assert H[2,0] == 0   # 0 to 1 nm
+        assert H[2,1] == 0   # 1 to 2 nm
+        assert H[2,2] == 0   # 2 to 3 nm
+        assert H[2,3] == 1   # 3 to 4 nm
+        assert (H[2,4:] == 0).all()
+
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
+            pixel_size_um=1.0, use_entire_track=False, max_jumps_per_track=2, n_gaps=0)
+
+        assert H[0,:].sum() == 4
+        assert H[1,:].sum() == 3
+        assert H[2,:].sum() == 1
+        assert H[3,:].sum() == 0
+
+        assert H[0,0] == 1  # 0 to 1 nm
+        assert H[0,1] == 1  # 1 to 2 nm
+        assert H[0,2] == 1  # 2 to 3 nm
+        assert H[0,3] == 1  # 3 to 4 nm
+        assert (H[0,4:] == 0).all()
+        assert H[1,0] == 0  # 0 to 1 nm
+        assert H[1,1] == 1  # 1 to 2 nm
+        assert H[1,2] == 1  # 2 to 3 nm
+        assert H[1,3] == 0  # 3 to 4 nm
+        assert H[1,4] == 0  # 4 to 5 nm
+        assert H[1,5] == 1  # 5 to 6 nm
+        assert (H[1,6:] == 0).all()
+        assert H[2,0] == 0  # 0 to 1 nm
+        assert H[2,1] == 0  # 1 to 2 nm
+        assert H[2,2] == 0  # 2 to 3 nm
+        assert H[2,3] == 1  # 3 to 4 nm
+        assert (H[2,4:] == 0).all()
+
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
+            pixel_size_um=1.0, use_entire_track=False, max_jumps_per_track=3, n_gaps=0)     
+
+        assert H[0,:].sum() == 5
+        assert H[1,:].sum() == 3
+        assert H[2,:].sum() == 1
+        assert H[3,:].sum() == 0
+
+        assert H[0,0] == 1  # 0 to 1 nm
+        assert H[0,1] == 2  # 1 to 2 nm
+        assert H[0,2] == 1  # 2 to 3 nm
+        assert H[0,3] == 1  # 3 to 4 nm
+        assert (H[0,4:] == 0).all()
+        assert H[1,0] == 0  # 0 to 1 nm
+        assert H[1,1] == 1  # 1 to 2 nm
+        assert H[1,2] == 1  # 2 to 3 nm
+        assert H[1,3] == 0  # 3 to 4 nm
+        assert H[1,4] == 0  # 4 to 5 nm
+        assert H[1,5] == 1  # 5 to 6 nm
+        assert (H[1,6:] == 0).all()
+        assert H[2,0] == 0  # 0 to 1 nm
+        assert H[2,1] == 0  # 1 to 2 nm
+        assert H[2,2] == 0  # 2 to 3 nm
+        assert H[2,3] == 1  # 3 to 4 nm
+        assert (H[2,4:] == 0).all()
+
+        # Should not change when we include gaps
+        H2, _ = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
+            pixel_size_um=1.0, use_entire_track=False, max_jumps_per_track=3, n_gaps=2)
+        assert (H == H2).all()
+
+        # Case 2 (with gaps)
+        print("\tchecking that it deals correctly with gaps...")
+
+        tracks = pd.DataFrame(index=np.arange(7), columns=["y", "x", "trajectory", "frame"])
+        tracks["trajectory"] = [1, 1, 1, 1, 0, 0, 0]
+        tracks["frame"]      = [4, 5, 7, 8, 1, 2, 5]
+        tracks["y"]          = [0, 0.5e-3, 1.5e-3, 3.0e-3, 5.0e-3, 7.5e-3, 10.5e-3]
+        tracks["x"]          =  0
+
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
+            pixel_size_um=1.0, use_entire_track=False, max_jumps_per_track=1, n_gaps=1)
+
+        assert H[0,:].sum() == 2
+        assert H[1,:].sum() == 1
+        assert H[2,:].sum() == 2
+        assert H[3,:].sum() == 2
+
+        assert H[0,0] == 1  # 0 to 1 nm
+        assert H[0,1] == 0  # 1 to 2 nm
+        assert H[0,2] == 1  # 2 to 3 nm
+        assert H[1,0] == 0  # 0 to 1 nm
+        assert H[1,1] == 1  # 1 to 2 nm
+        assert H[2,0] == 0  # 0 to 1 nm
+        assert H[2,1] == 1  # 1 to 2 nm
+        assert H[2,2] == 0  # 2 to 3 nm
+        assert H[2,3] == 1  # 3 to 4 nm
+        assert H[3,0] == 0  # 0 to 1 nm
+        assert H[3,1] == 0  # 1 to 2 nm
+        assert H[3,2] == 0  # 2 to 3 nm
+        assert H[3,3] == 1  # 3 to 4 nm
+        assert H[3,4] == 0  # 4 to 5 nm
+        assert H[3,5] == 1  # 5 to 6 nm
+
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0,
+            pixel_size_um=1.0, use_entire_track=False, max_jumps_per_track=2, n_gaps=1)
+
+        assert H[0,:].sum() == 3
+        assert H[1,:].sum() == 1
+        assert H[2,:].sum() == 3
+        assert H[3,:].sum() == 2
+
+        # Case 3 (more complicated; more trajectories)
+        tracks = pd.DataFrame(index=np.arange(20), columns=["y", "x", "trajectory", "frame"])
+        tracks["trajectory"] = np.array([0,      0,      0,      0,      0,      1,      1,      2,      2,      2,      3,       3,       3,       3,       3,       3,       4,      4,        4,       4])
+        tracks["frame"]      = np.array([3,      4,      5,      6,      7,      0,      1,      0,      1,      2,      4,       5,       6,       7,       8,       9,      10,     11,       12,      13])
+        tracks["y"]          = np.array([0, 5.0e-4, 1.0e-3, 2.0e-3, 3.5e-3,      0, 2.001e-3,      0, 2.5e-3, 5.501e-3,      0,  3.5e-3,  7.5e-3, 12.0e-3, 17.0e-3, 22.5e-3,     0.0, 6.0e-3,  12.5e-3, 19.5e-3])
+        tracks["x"] = np.zeros(20, dtype=np.float64)
+
+        H, bin_edges = utils.rad_disp_histogram_2d(tracks, n_frames=4, bin_size=0.001, max_jump=5.0, 
+            pixel_size_um=1.0, use_entire_track=False, max_jumps_per_track=2)
+
+        assert H.shape == (4, 5000)
+        assert H[0,:].sum() == 9
+        assert H[1,:].sum() == 7
+        assert H[2,:].sum() == 5
+        assert H[3,:].sum() == 3
+
+        assert H[0,0] == 2  # 0 to 1 nm
+        assert H[0,1] == 0  # 1 to 2 nm
+        assert H[0,2] == 2  # 2 to 3 nm
+        assert H[0,3] == 2  # 3 to 4 nm
+        assert H[0,4] == 1  # 4 to 5 nm
+        assert H[0,5] == 0  # 5 to 6 nm
+        assert H[0,6] == 2  # 6 to 7 nm
+        assert H[0,7] == 0  # 7 to 8 nm
+        assert H[0,8] == 0  # 8 to 9 nm
 
 class TestBrownianDefocTools(unittest.TestCase):
     """

@@ -47,7 +47,8 @@ from .plot import (
 
 def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01, n_gaps=0,
     pixel_size_um=0.16, bounds=None, guess=None, plot=False, show_plot=True, save_png=None, 
-    weight_timesteps=False, weight_short_disps=False, max_jump=5.0, first_only=True, **model_kwargs):
+    weight_timesteps=False, weight_short_disps=False, max_jump=5.0, use_entire_track=False,
+    max_jumps_per_track=10, **model_kwargs):
     """
     Fit a set of trajectories to a diffusion model by minimizing the squared deviation
     between the experimental and model CDFs at each of a set of time points. Return
@@ -77,6 +78,10 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
                                 of displacements in that frame interval
         weight_short_disps  :   bool, weight fits 
         max_jump            :   float, the maximum displacement to consider in um
+        use_entire_track    :   bool, use every displacement from every trajectory
+                                to compile the jump length histogram
+        max_jumps_per_track :   int, the maximum number of jumps to consider from
+                                any given trajectory if *use_entire_track* is False
         model_kwargs        :   special arguments accepted by model function
 
     returns
@@ -101,7 +106,8 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
 
     # Compile jump lengths
     H, bin_edges = rad_disp_histogram_2d(tracks, n_frames=n_frames, bin_size=bin_size,
-        pixel_size_um=pixel_size_um, max_jump=max_jump, first_only=first_only, n_gaps=n_gaps)
+        pixel_size_um=pixel_size_um, max_jump=max_jump, n_gaps=n_gaps,
+        use_entire_track=use_entire_track, max_jumps_per_track=max_jumps_per_track)
     n_bins = bin_edges.shape[0] - 1
 
     # Catch pathological input: if there are no recorded displacements, then return
@@ -258,7 +264,8 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
 
 def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
     pixel_size_um=0.16, bounds=None, guess=None, plot=False, show_plot=True,
-    save_png=None, fall_back_to_model_cdf=True, **model_kwargs):
+    save_png=None, fall_back_to_model_cdf=True, use_entire_track=False,
+    max_jumps_per_track=10, **model_kwargs):
     """
     Given a diffusion model, estimate the model parameters that maximize the likelihood
     of the observed trajectories. Return the final fit parameters along with the 
@@ -286,6 +293,10 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
         fall_back_to_model_cdf  :   bool. If fitting fails, fall back to *fit_model_cdf* as 
                                 an alternative. The ML estimator can be more accurate, but
                                 is also less stable.
+        use_entire_track    :   bool, use every displacement from every trajectory
+                                to compile the jump length histogram
+        max_jumps_per_track :   int, the maximum number of jumps to consider from
+                                any given trajectory if *use_entire_track* is False                               
         model_kwargs        :   special arguments accepted by model function
 
     returns
@@ -302,7 +313,8 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
     """
     # Calculate the radial displacements for each frame interval
     jumps = rad_disp_2d(tracks, n_frames=n_frames, frame_interval=frame_interval, 
-        pixel_size_um=pixel_size_um, first_only=True)
+        pixel_size_um=pixel_size_um, use_entire_track=use_entire_track,
+        max_jumps_per_track=max_jumps_per_track)
 
     # Define the model functions
     kwargs = {
@@ -379,7 +391,8 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
     # multiplying by the bin size 
     bin_size = 0.001  # um 
     H, bin_edges = rad_disp_histogram_2d(tracks, n_frames=n_frames, bin_size=bin_size,
-        pixel_size_um=pixel_size_um, max_jump=5.0, first_only=True)
+        pixel_size_um=pixel_size_um, max_jump=5.0, use_entre_track=False, 
+        max_jumps_per_track=10)
     n_bins = bin_edges.shape[0] - 1
     pmfs = normalize_pmf(H)
     cdfs = np.cumsum(pmfs, axis=1)

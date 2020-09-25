@@ -196,32 +196,15 @@ def strobe_nucleus(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=T
     # reenter and not be lost, if the number of gaps tolerated during tracking
     # is greater than 0
     if exclude_outside:
-
-        gap_count = np.zeros(n_tracks, dtype=np.int64)
-        dead = np.zeros(n_tracks, dtype=np.bool)
-
         for t in range(tracks.shape[1]):
 
             # Get the set of localizations that lie outside the focal plane
             # at this frame interval
             outside = np.abs(tracks[:,t,0]) > hz 
 
-            # For the trajectories corresponding to those localizations, 
-            # increment their blink counters by 1
-            gap_count[outside] += 1
-
-            # For trajectories inside the focal volume, set the blink counter
-            # to 0
-            gap_count[~outside] = 0
-
-            # Kill trajectories that have been outside the focal volume for 
-            # longer than the tolerated number of gap frames
-            dead = np.logical_or(dead, gap_count > n_gaps)
-
-            # Set localizations that are not observed to NaN
-            set_nan = np.logical_or(outside, dead)
+            # Set the coordinates of these localizations to NaN
             for d in range(3):
-                tracks[:,t,d][set_nan] = np.nan 
+                tracks[:,t,d][outside] = np.nan 
 
 
     ## BLEACHING: stochastically and permanently bleach molecules. The bleaching
