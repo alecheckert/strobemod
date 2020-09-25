@@ -660,7 +660,8 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
                 mean_p += p
 
             if verbose and iter_idx % 10 == 0:
-                print("Finished with %d/%d iterations..." % (iter_idx, n_iter))
+                sys.stdout.write("Finished with %d/%d iterations..." % (iter_idx, n_iter))
+                # print("Finished with %d/%d iterations..." % (iter_idx, n_iter))
 
         mean_p /= (n_iter - burnin)
         return mean_p 
