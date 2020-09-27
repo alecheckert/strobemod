@@ -320,7 +320,7 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
 def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
     dz=0.7, loc_error=0.0, pixel_size_um=1.0, verbose=True,
     track_diffusivities_out_csv=None, mode="by_displacement", 
-    disable_track_length_weighting=True):
+    disable_track_length_weighting=False):
     """
     Estimate the fraction of trajectories in each of a spectrum of diffusive states,
     accounting for defocalization over the experimental frame interval, using an
