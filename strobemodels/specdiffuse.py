@@ -282,7 +282,8 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
     L_cond = np.zeros((vecs.shape[0], n_states), dtype=np.float64)
     for j, D in enumerate(diffusivities):
         sig2 = 2 * (D * frame_interval + loc_error ** 2)
-        L_cond[:,j] = np.exp(-vecs[:,4] / (2 * sig2)) / (2 * sig2)
+        L_cond[:,j] = np.exp(-((vecs[:,2]**2 + vecs[:,3]**2))/(2*sig2))/(np.pi*2*sig2)
+        # L_cond[:,j] = np.exp(-vecs[:,4] / (2 * sig2)) / (2 * sig2)
 
     # Formulate the naive likelihoods as a pandas.DataFrame. The following
     # few steps are kind of an obtuse but very fast way to calculate the 
@@ -294,7 +295,7 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
     L_cond["track_length"] = vecs[:,0].astype(np.int64)
     L = np.zeros((n_tracks, n_states), dtype=np.float64)
     L_cond["f_remain"] = L_cond["track_length"].map({i+2: state_biases[i,j] \
-        for i in range(n_frames)})   
+        for i in range(n_frames)})
 
     # Only consider the first few jumps to calculate the diffusivity likelihoods,
     # to prevent overflow errors when multiplying large numbers of likelihoods.
@@ -320,7 +321,7 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
 def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
     dz=0.7, loc_error=0.0, pixel_size_um=1.0, verbose=True,
     track_diffusivities_out_csv=None, mode="by_displacement", 
-    disable_track_length_weighting=False):
+    disable_track_length_weighting=False, pseudoprob=0.001):
     """
     Estimate the fraction of trajectories in each of a spectrum of diffusive states,
     accounting for defocalization over the experimental frame interval, using an
@@ -457,6 +458,10 @@ def emdiff(tracks, diffusivities, n_iter=10000, n_frames=4, frame_interval=0.01,
 
     # Expectation-maximization loop
     for iter_idx in range(n_iter):
+
+        # Add pseudocounts, if desired
+        p = p + pseudoprob
+        p /= p.sum()
 
         # Evaluate the probability that each observation belongs to each 
         # diffusive state. Optionally, weight each trajectory's influence
@@ -605,6 +610,9 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     for j, D in enumerate(diffusivities):
         f_remain_one_interval[j] = defoc_prob_brownian(D, 1, 
             frame_interval=frame_interval, dz=dz, n_gaps=0)[0]
+
+    ## EXPERIMENTAL
+    prior = prior * f_remain_one_interval
 
     # State bias terms to use during Gibbs sampling. These reflect the 
     # idea that, if we have a trajectory under which two different diffusivities
