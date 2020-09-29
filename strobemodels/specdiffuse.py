@@ -6,6 +6,7 @@ underlying diffusivities using expectation maximization
 """
 import os
 import sys
+import warnings 
 
 # Numeric
 import numpy as np 
@@ -234,7 +235,7 @@ def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupation
     return L 
 
 def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
-    frame_interval=0.01, loc_error=0.0, n_frames=4, jump_cap_likelihood=10):
+    frame_interval=0.01, loc_error=0.0, n_frames=200):
     """
     Given a set of trajectories, evaluate the likelihood of each of a set
     of diffusivities, given each trajectory.
@@ -256,12 +257,6 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
         loc_error       :   float, 1D localization error in um
         n_frames        :   int, the number of displacements from each 
                             trajectory to consider
-        jump_cap_likelihood :   int, the maximum number of jumps to consider
-                            from each trajectory for calculating the likelihood
-                            of each diffusing state. The purpose of this is 
-                            to prevent overflow errors when calculating 
-                            the likelihoods of diffusivities for very long 
-                            trajectories.
 
     returns
     -------
@@ -283,7 +278,6 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
     for j, D in enumerate(diffusivities):
         sig2 = 2 * (D * frame_interval + loc_error ** 2)
         L_cond[:,j] = np.exp(-((vecs[:,2]**2 + vecs[:,3]**2))/(2*sig2))/(np.pi*2*sig2)
-        # L_cond[:,j] = np.exp(-vecs[:,4] / (2 * sig2)) / (2 * sig2)
 
     # Formulate the naive likelihoods as a pandas.DataFrame. The following
     # few steps are kind of an obtuse but very fast way to calculate the 
@@ -293,9 +287,6 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
     L_cond = pd.DataFrame(L_cond, columns=diffusivities)
     L_cond["trajectory"] = vecs[:,5]
     L_cond["track_length"] = vecs[:,0].astype(np.int64)
-    L = np.zeros((n_tracks, n_states), dtype=np.float64)
-    L_cond["f_remain"] = L_cond["track_length"].map({i+2: state_biases[i,j] \
-        for i in range(n_frames)})
 
     # Only consider the first few jumps to calculate the diffusivity likelihoods,
     # to prevent overflow errors when multiplying large numbers of likelihoods.
@@ -303,18 +294,52 @@ def evaluate_diffusivity_likelihood(vecs, diffusivities, state_biases=None,
     # inferring the diffusivities.
     L_cond["ones"] = 1 
     L_cond["index_in_track"] = L_cond.groupby("trajectory")["ones"].cumsum()
-    L_cond = L_cond[L_cond["index_in_track"] <= jump_cap_likelihood]
+    L_cond = L_cond[L_cond["index_in_track"] <= n_frames]
 
     # Evaluate the likelihood of each trajectory given each diffusivity
+    L = np.zeros((n_tracks, n_states), dtype=np.float64)
     for j, D in enumerate(diffusivities):
-        L[:,j] = np.asarray(L_cond.groupby("trajectory")[D].prod() * \
-            L_cond.groupby("trajectory")["f_remain"].first())
+        L_cond["f_remain"] = L_cond["track_length"].map({i+2: state_biases[i,j] \
+            for i in range(n_frames)})
+
+        ## VERSION 1
+        # L[:,j] = np.asarray(L_cond.groupby("trajectory")[D].prod() * \
+        #     L_cond.groupby("trajectory")["f_remain"].first())
+
+        ## VERSION 2 (stabilizes long trajectories against floating-point
+        # errors). We'll get -np.inf for numbers that are too low for log
+        # (close to 0), so catch the warnings that ensue. These -np.inf
+        # values are set to 0 in the exponentiation step below.
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            L_cond[D] = np.log(L_cond[D])
+            L_cond["f_remain"] = np.log(L_cond["f_remain"])
+            L[:,j] = np.asarray(L_cond.groupby("trajectory")[D].sum() + \
+                L_cond.groupby("trajectory")["f_remain"].first())
+
+    ## VERSION 2, CONT'D. This normalizes the likelihood across
+    # diffusivities for each trajectory. The key here is subtracting
+    # the maximum diffusivity log likelihood for each trajectory, which
+    # means that at least one diffusivity in each trajectory has a nonzero
+    # likelihood after normalization.
+    L = (L.T - L.max(axis=1)).T
+    L = np.exp(L)
+    L = (L.T / L.sum(axis=1)).T 
+
+    print("np.isnan(L).any(): ", np.isnan(L).any())
+    print("np.isinf(L).any(): ", np.isinf(L).any())
+    print("(L.sum(axis=1) == 0).any(): ", (L.sum(axis=1) == 0).any())
 
     # Record the trajectory indices as well
     track_indices = np.asarray(L_cond.groupby("trajectory").apply(lambda i: i.name)).astype(np.int64)
 
     # Record the trajectory lengths as well
     track_lengths = np.asarray(L_cond.groupby("trajectory")["track_length"].first())
+
+    print("track_lengths.mean(): ", track_lengths.mean())
+    print("track_lengths.max(): ", track_lengths.max())
+    print("track_lengths.min(): ", track_lengths.min())
+    print("track_lengths.std(): ", track_lengths.std())
 
     return L, track_indices, track_lengths 
 
@@ -611,8 +636,9 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         f_remain_one_interval[j] = defoc_prob_brownian(D, 1, 
             frame_interval=frame_interval, dz=dz, n_gaps=0)[0]
 
-    ## EXPERIMENTAL
-    prior = prior * f_remain_one_interval
+    # Adjust prior for defocalization
+    if not dz is np.inf:
+        prior = prior * f_remain_one_interval
 
     # State bias terms to use during Gibbs sampling. These reflect the 
     # idea that, if we have a trajectory under which two different diffusivities
@@ -647,6 +673,14 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         # random points in the focal volume, then F[i,j] gives the fraction
         # of trajectories with diffusivity j after i+1 frames
         F_remain = (F_remain.T / F_remain.sum(axis=1)).T 
+
+    ## EXPERIMENTAL
+
+    # F_remain = np.zeros((n_frames, K), dtype=np.float64)
+    # for j, D in enumerate(diffusivities):
+
+    ##
+
 
     # Evaluate the likelihood of each trajectory given each diffusive state.
     # The result, *L[i,j]*, gives the likelihood of diffusivity j given 
