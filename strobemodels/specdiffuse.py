@@ -91,7 +91,8 @@ def expect_max(data, likelihood, diffusivities, n_iter=1000, **kwargs):
     print("")
     return p
 
-def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0):
+def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0, 
+    min_track_length=2):
     """
     Helper function for expectation-maximization and Gibbs sampling routines, used
     to preprocess a set of trajectories for evaluation of likelihoods.
@@ -105,6 +106,7 @@ def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0):
         start_frame     :   int, disregard trajectories before this frame
         n_frames        :   int
         pixel_size_um   :   float
+        min_track_length:   int, the minimum trajectory length to consider in frames
 
     returns
     -------
@@ -128,6 +130,11 @@ def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0):
     # Do not modify the original dataframe
     tracks = tracks.copy()
 
+    # Exclude trajectories that are too short, if desired
+    tracks = track_length(tracks)
+    if min_track_length > 2:
+        tracks = tracks[tracks["track_length"] >= min_track_length]
+
     # Only consider trajectories after some start frame
     if not start_frame is None:
         tracks = tracks[tracks['frame'] >= start_frame]
@@ -140,9 +147,6 @@ def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0):
     # set of trajectories
     tracks = assign_index_in_track(tracks)
     tracks = tracks[tracks["index_in_track"] <= n_frames].copy()
-
-    # Calculate trajectory length
-    tracks = track_length(tracks)
 
     # Exclude singlets and non-trajectories from the analysis
     tracks = tracks[np.logical_and(tracks["track_length"] > 1, tracks["trajectory"] >= 0)]
@@ -227,7 +231,7 @@ def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupation
 
 def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
     frame_interval=0.01, loc_error=0.0, use_entire_track=True, max_jumps_per_track=10,
-    pixel_size_um=1.0, start_frame=None, likelihood_mode="binned"):
+    min_jumps_per_track=1, pixel_size_um=1.0, start_frame=None, likelihood_mode="binned"):
     """
     Create a matrix that gives the likelihood of each of a set of diffusivities,
     given each of a set of trajectories.
@@ -290,7 +294,8 @@ def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
 
     # Calculate squared radial displacements for all trajectories
     vecs, n_tracks = rad_disp_squared(tracks, start_frame=start_frame,
-        n_frames=n_frames, pixel_size_um=pixel_size_um)
+        n_frames=n_frames, pixel_size_um=pixel_size_um,
+        min_track_length=min_jumps_per_track+1)
 
     # Get the sum of squared displacements for each trajectory
     df = pd.DataFrame(vecs, columns=["track_length", "track_index_diff", 
@@ -539,10 +544,10 @@ def emdiff(tracks, diffusivities, n_iter=10000, frame_interval=0.01,
     return p, diffusivities_mid 
 
 def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
-    use_entire_track=True, max_jumps_per_track=np.inf, frame_interval=0.01,
-    loc_error=0.0, pixel_size_um=1.0, dz=np.inf, verbose=True, pseudocounts=1,
-    n_threads=1, track_diffusivities_out_csv=None, mode="by_displacement",
-    defoc_corr="first_only", damp=0.1, diagnostic=True,
+    use_entire_track=True, max_jumps_per_track=np.inf, min_jumps_per_track=1,
+    frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0, dz=np.inf,
+    verbose=True, pseudocounts=1, n_threads=1, track_diffusivities_out_csv=None,
+    mode="by_displacement", defoc_corr="first_only", damp=0.1, diagnostic=True,
     likelihood_mode="binned", start_frame=0):
     """
     Estimate a distribution of diffusivities from a set of trajectories 
@@ -563,12 +568,13 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         K = diffusivities.shape[0]
         diffusivities_mid = diffusivities 
 
-    # Calculate defocalization probabilities for each state after one 
-    # frame interval
+    # Calculate defocalization probabilities for each state after the
+    # minimum observation time (defined as the minimum number of frame
+    # intervals required to include a trajectory)
     f_remain_one_interval = np.empty(K, dtype=np.float64)
     for j, D in enumerate(diffusivities_mid):
         f_remain_one_interval[j] = defoc_prob_brownian(D, 1, 
-            frame_interval=frame_interval, dz=dz, n_gaps=0)[0]
+            frame_interval=frame_interval, dz=dz, n_gaps=0)[-1]
 
     # Choose the prior
     if dz is np.inf:
@@ -582,7 +588,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         frame_interval=frame_interval, loc_error=loc_error,
         use_entire_track=use_entire_track, max_jumps_per_track=max_jumps_per_track,
         pixel_size_um=pixel_size_um, start_frame=start_frame,
-        likelihood_mode=likelihood_mode)
+        likelihood_mode=likelihood_mode, min_jumps_per_track=min_jumps_per_track)
 
     n_tracks = len(track_indices)
     print("Total trajectory count: {}".format(n_tracks))
