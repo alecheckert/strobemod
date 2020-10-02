@@ -128,8 +128,10 @@ def strobe_nucleus(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=T
 
     args
     ----
-        model_obj       :   either a FractionalBrownianMotion3D or LevyFlight3D
-                            object, the simulator
+        model_obj       :   a FractionalBrownianMotion3D or LevyFlight3D object,
+                            the simulator; or alternatively a 3D ndarray of shape
+                            (n_tracks, track_len, 3), the 3D positions of each 
+                            trajectory
         n_tracks        :   int, the number of trajectories to simulate
         dz              :   float, the thickness of the observation plane in um
         loc_error       :   float, standard deviation of normally distributed 1D
@@ -154,7 +156,10 @@ def strobe_nucleus(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=T
     diameter = nucleus_radius * 2
 
     # Simulate some 3D trajectories, which start at the origin
-    tracks = model_obj(n_tracks)
+    if isinstance(model_obj, np.ndarray):
+        tracks = model_obj
+    else:
+        tracks = model_obj(n_tracks)
 
 
     ## STARTING POSITIONS: choose random starting positions inside a sphere of 
