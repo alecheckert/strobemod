@@ -33,6 +33,7 @@ following specification:
 #include <iostream>
 #include <fstream>
 #include <random>
+#include <algorithm>
 
 #include <cmath>
 #include <ctime>
@@ -42,8 +43,8 @@ following specification:
 #include <getopt.h>
 #include <libgen.h>
 
-#define OPTSTR "a:n:b:m:t:s:c:d:z:e:vh"
-#define USAGE_FMT " [-a alpha] [-n n_iter] [-b burnin] [-m n_aux] [-t frame_interval] [-s metropolis_sigma] [-c min_log_D] [-d max_log_D] [-z buffer_size] [-e seed] [-v verbose] [-h help] IN_CSV OUT_CSV"
+#define OPTSTR "a:n:b:m:t:s:c:d:z:e:x:vh"
+#define USAGE_FMT " [-a alpha] [-n n_iter] [-b burnin] [-m n_aux] [-t frame_interval] [-s metropolis_sigma] [-c min_log_D] [-d max_log_D] [-z buffer_size] [-e seed] [-x max_occ_weight] [-v verbose] [-h help] IN_CSV OUT_CSV"
 
 void usage(char *progname, int opt);
 
@@ -71,6 +72,7 @@ int main (int argc, char *argv[]) {
     double max_log_D = 2.0;
     double max_log_L, p;
     bool verbose = false;
+    int max_occ_weight = 5;
     
     int opt;
     while (( opt = getopt(argc, argv, OPTSTR)) != -1) {
@@ -104,6 +106,9 @@ int main (int argc, char *argv[]) {
                 break;
             case 'e':
                 seed = std::stoi(optarg);
+                break;
+            case 'x':
+                max_occ_weight = std::stoi(optarg);
                 break;
             case 'v':
                 verbose = true;
@@ -281,7 +286,7 @@ int main (int argc, char *argv[]) {
     for (ci=0; ci<B; ci++) {
         if (c_occs[ci] > 0) {
             c_active[ci] = true;
-            c_log_occs[ci] = std::log(c_occs[ci]);
+            c_log_occs[ci] = std::log(std::max(max_occ_weight, c_occs[ci]));
         } else {
             c_active[ci] = false;
             c_log_occs[ci] = 1;
@@ -320,7 +325,7 @@ int main (int argc, char *argv[]) {
             if (c_occs[ci] == 0) {
                 c_active[ci] = false;
             } else {
-                c_log_occs[ci] = std::log(c_occs[ci]);
+                c_log_occs[ci] = std::log(std::max(max_occ_weight, c_occs[ci]));
             }
 
             // Choose whether to have this trajectory start a new markov chain
@@ -390,7 +395,7 @@ int main (int argc, char *argv[]) {
 
                 // Update the occupation count for this component
                 c_occs[ci] += track_n_disps;
-                c_log_occs[ci] = std::log(c_occs[ci]);
+                c_log_occs[ci] = std::log(std::max(max_occ_weight, c_occs[ci]));
             }
         }
 
@@ -441,7 +446,9 @@ int main (int argc, char *argv[]) {
         }
 
         if (verbose) {
-            std::cout << "Finished with " << iter_idx << "/" << n_iter << " iterations, with " << n_active << " MCs\r";
+            std::cout << "Finished with " << iter_idx << "/" << 
+                n_iter << " iterations, with " << n_active << 
+                " MCs active\r";
             std::cout.flush();
         }
     }

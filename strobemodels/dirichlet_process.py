@@ -52,7 +52,7 @@ def gs_dp_log_diff(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
 def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
     m0=30, n_iter=1000, burnin=20, frame_interval=0.01, pixel_size_um=1.0, 
     max_jumps_per_track=20, min_jumps_per_track=1, B=10000, 
-    metropolis_sigma=0.1, num_workers=6):
+    metropolis_sigma=0.1, num_workers=6, max_occ_weight=5):
     """
     Given a set of trajectories and a log-uniform prior, estimate the
     posterior distribution of diffusivities.
@@ -216,7 +216,8 @@ def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
             burnin=burnin,
             min_log_D=min_log_D,
             max_log_D=max_log_D,
-            seed=(i * 1777) % 373
+            seed=(i * 1777) % 373,
+            max_occ_weight=max_occ_weight
         ))
 
 
@@ -293,7 +294,8 @@ def format_cl_args(in_csv, out_csv, verbose=False, **kwargs):
         "burnin": "b",
         "min_log_D": "c",
         "max_log_D": "d",
-        "seed": "e"
+        "seed": "e",
+        "max_occ_weight": "x"
     }
     optstr = " ".join(["-{} {}".format(str(keymap.get(k)), str(kwargs.get(k))) \
         for k in kwargs.keys() if k in keymap.keys()])
