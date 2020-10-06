@@ -440,8 +440,8 @@ int main (int argc, char *argv[]) {
              } 
         }
 
-        if ((verbose) and (iter_idx % 10 == 0)) {
-            std::cout << "Finished with " << iter_idx << "/" << n_iter << " iterations\r";
+        if (verbose) {
+            std::cout << "Finished with " << iter_idx << "/" << n_iter << " iterations, with " << n_active << " MCs\r";
             std::cout.flush();
         }
     }
