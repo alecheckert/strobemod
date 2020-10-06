@@ -543,6 +543,73 @@ def emdiff(tracks, diffusivities, n_iter=10000, frame_interval=0.01,
     if verbose: print("")
     return p, diffusivities_mid 
 
+def gsdiff_subsample(tracks, diffusivities, n_partitions=6, subsample_size=0.3,
+    subsample_type="fraction", n_threads=6, **kwargs):
+    """
+    Given a set of trajectories, subsample the trajectories and run gsdiff
+    to estimate the state occupations of each subsample. Then average the 
+    results at the end.
+
+    args
+    ----
+        tracks              :   pd.DataFrame
+        diffusivities       :   1D ndarray
+        n_partitions        :   int, the number of subsamples
+        subsample_size      :   float or int, the size of each subsample.
+                                If *subsample_type* is "fraction", then this
+                                is interpreted as the fraction of the original
+                                dataset to use for subasmpling. If *subsample_type*
+                                is "number", then this is interpreted as the absolute
+                                size of each subsample in trajectories
+        subsample_type      :   str, either "fraction" or "number"
+        **kwargs            :   to gsdiff()
+
+    returns
+    -------
+        (
+            1D ndarray of shape K, the average of each subsample
+            1D ndarray of shape K, the diffusivity bin midpoints
+        )
+
+    """
+    assert subsample_type in ["fraction", "number"]
+
+    # Exclude singlets
+    tracks = track_length(tracks)
+    tracks = tracks[tracks["track_length"] > 1].copy()
+    track_indices = tracks["trajectory"].unique()
+    n_tracks = len(track_indices)
+
+    # Choose the subsamples
+    if subsample_type == "fraction":
+        subsample_size = int(subsample_size * n_tracks)
+
+    elif subsample_type == "number":
+        if subsample_size > n_tracks:
+            raise RuntimeError("specdiffuse.gsdiff_subsample: subsample_size (%d) " \
+                "cannot be greater than the number of unique trajectories (%d)" % (
+                    subsample_size, n_tracks))
+
+    subsamples = [np.random.choice(track_indices, size=subsample_size, replace=False) \
+        for j in range(n_partitions)]
+
+    # Run gsdiff on a single subsample
+    @dask.delayed
+    def driver(i):
+        subtracks = tracks.loc[tracks["trajectory"].isin(subsamples[i])]
+        return gsdiff(subtracks, diffusivities, n_threads=1, **kwargs)
+
+    # Results array
+    jobs = [driver(i) for i in range(n_partitions)]
+    results = dask.compute(*jobs, scheduler="processes", num_workers=n_threads)
+    posterior_means = np.asarray([i[0] for i in results])
+    diffusivities_mid = results[0][1]
+    print(posterior_means.shape)
+    posterior_means = posterior_means.mean(axis=0)
+    posterior_means /= posterior_means.sum()
+    return posterior_means, diffusivities_mid 
+
+
 def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     use_entire_track=True, max_jumps_per_track=np.inf, min_jumps_per_track=1,
     frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0, dz=np.inf,
@@ -640,10 +707,6 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         # Draw the initial estimate for the state occupations from the prior
         p = np.random.dirichlet(prior)
 
-        # The accumulating posterior mean
-        # mean_p = np.zeros(K, dtype=np.float64)
-        mean_n = np.zeros(K, dtype=np.float64)
-
         # For sampling from the random state occupation vector
         cdf = np.zeros(n_tracks, dtype=np.float64)
         unassigned = np.ones(n_tracks, dtype=np.bool)
@@ -651,6 +714,9 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
 
         # The total counts of each state in the state occupation vector
         n = np.zeros(K, dtype=np.float64)
+
+        # The sequence of samples produced by the Gibbs sampler
+        samples = np.zeros((n_iter-burnin, K), dtype=np.float64)
 
         # Sampling loop
         for iter_idx in range(n_iter):
@@ -734,19 +800,14 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
 
             # If after the burnin period, accumulate this estimate into the posterior
             # mean estimate
-            if iter_idx > burnin:
-                # mean_p += p
-                mean_n += n
+            if iter_idx >= burnin:
+                samples[iter_idx-burnin,:] = n / f_remain_one_interval 
 
             if verbose and iter_idx % 10 == 0:
                 sys.stdout.write("Finished with %d/%d iterations...\r" % (iter_idx, n_iter))
                 sys.stdout.flush()
 
-        # mean_p /= (n_iter - burnin)
-        # return mean_p 
-
-        mean_n /= mean_n.sum()
-        return mean_n
+        return samples 
 
     # Run multi-threaded if the specified number of threads is greater than 1
     if n_threads == 1:
@@ -754,21 +815,18 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     else:
         scheduler = "processes"
     jobs = [_gibbs_sample(j, verbose=(j==0)) for j in range(n_threads)]
-    posterior_means = dask.compute(*jobs, scheduler=scheduler, num_workers=n_threads)
+    samples = dask.compute(*jobs, scheduler=scheduler, num_workers=n_threads)
+    samples = np.concatenate(samples, axis=0)
 
-    # Accumulate the posterior means across threads
-    posterior_means = np.asarray(posterior_means)
-    posterior_means = posterior_means.sum(axis=0)
-    posterior_means /= posterior_means.sum()
-
-    # Correct for the probability of defocalization at one frame interval
-    # (resulting in no trajectory)
-    posterior_means = posterior_means / f_remain_one_interval
-    posterior_means /= posterior_means.sum()
+    # Normalize over diffusivities for each sample
+    samples = (samples.T / samples.sum(axis=1)).T 
 
     # If desired, evaluate the likelihoods of each diffusivity for each trajectory
     # under the model specified by the posterior mean. Then save these to a csv
     if not track_diffusivities_out_csv is None:
+
+        # Accumulate the posterior means across threads
+        posterior_means = samples.mean(axis=0)
 
         # Calculate the probability of each diffusive state, given each trajectory
         # and the posterior model distribution of diffusivities
@@ -783,7 +841,252 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         # Save 
         out_df.to_csv(track_diffusivities_out_csv, index=False)
 
-    return posterior_means, diffusivities_mid
+    return samples, diffusivities_mid
+
+def gsdiff_median(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
+    use_entire_track=True, max_jumps_per_track=np.inf, min_jumps_per_track=1,
+    frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0, dz=np.inf,
+    verbose=True, pseudocounts=1, n_threads=1, track_diffusivities_out_csv=None,
+    mode="by_displacement", defoc_corr="first_only", damp=0.1, diagnostic=True,
+    likelihood_mode="binned", start_frame=0):
+    """
+    Estimate a distribution of diffusivities from a set of trajectories 
+    using Gibbs sampling.
+
+    This time, use the posterior geometric median rather than the posterior mean.
+
+    """
+    diffusivities = np.asarray(diffusivities)
+
+    # Weiszfeld's algorithm for computing the L2 geometric median
+    def weiszfeld(X, convergence=1.0e-8, max_iter=100, reg=1.0e-6):
+        """
+        args
+        ----
+            X   :   2D ndarray of shape (n_samples, dimension)
+
+        returns
+        -------
+            1D ndarray of shape (dimension,)
+
+        """
+        prev = X.mean(axis=0)
+        for iter_idx in range(max_iter):
+            dist = np.abs(X - prev) + reg
+            curr = (X/dist).sum(axis=0) / (1.0/dist).sum(axis=0)
+            if (np.abs(curr - prev) < convergence).all():
+                break 
+            else:
+                prev = curr 
+        return curr 
+
+    # Treat the diffusivities array as bin edges, with the center of 
+    # each bin defined as the logistic mean of the edges
+    if likelihood_mode in ["binned", "binned_reg"]:
+        K = diffusivities.shape[0] - 1
+        diffusivities_mid = np.sqrt(diffusivities[1:] * diffusivities[:-1])
+
+    # Treat the diffusivities array as points, with likelihoods 
+    # representative of the entire neighborhood of diffusivities
+    elif likelihood_mode == "point":
+        K = diffusivities.shape[0]
+        diffusivities_mid = diffusivities 
+
+    # Calculate defocalization probabilities for each state after the
+    # minimum observation time (defined as the minimum number of frame
+    # intervals required to include a trajectory)
+    f_remain_one_interval = np.empty(K, dtype=np.float64)
+    for j, D in enumerate(diffusivities_mid):
+        f_remain_one_interval[j] = defoc_prob_brownian(D, 1, 
+            frame_interval=frame_interval, dz=dz, n_gaps=0)[-1]
+
+    # Choose the prior
+    if dz is np.inf:
+        prior = np.ones(K, dtype=np.float64) * pseudocounts 
+    else:
+        prior = f_remain_one_interval * pseudocounts / f_remain_one_interval.max()
+
+    # Evaluate the likelihood of each trajectory given each diffusive state
+    L, track_indices, track_lengths = evaluate_diffusivity_likelihood(
+        tracks, diffusivities, state_biases=f_remain_one_interval,
+        frame_interval=frame_interval, loc_error=loc_error,
+        use_entire_track=use_entire_track, max_jumps_per_track=max_jumps_per_track,
+        pixel_size_um=pixel_size_um, start_frame=start_frame,
+        likelihood_mode=likelihood_mode, min_jumps_per_track=min_jumps_per_track)
+
+    n_tracks = len(track_indices)
+    print("Total trajectory count: {}".format(n_tracks))
+
+    # The number of displacements corresponding to each trajectory, which is 
+    # the statistical weight of each trajectory toward state vector estimation
+    n_disps = track_lengths - 1
+
+    if diagnostic:
+
+        # Show the distribution of diffusivities across all trajectories
+        fig, ax = plt.subplots(2, 1, figsize=(6, 6))
+        ax[0].plot(diffusivities_mid, L.mean(axis=0), color="k")
+        ax[1].plot(diffusivities_mid, (L.T * track_lengths).sum(axis=1), color="k")
+        for j in range(2):
+            ax[j].set_xscale("log")
+            ax[j].set_ylabel("likelihood")
+            ax[j].set_xlabel("Diffusivity ($\mu$m$^{2}$ s$^{-1}$")
+        ax[0].set_title("Summed across trajectories")
+        ax[1].set_title("Summed across trajectories and weighted by # disps")
+        plt.tight_layout(); plt.show(); plt.close()
+
+        # Show some sample trajectory likelihoods
+        for i in range(20):
+            print("Trajectory %d:" % i)
+            plt.plot(diffusivities_mid, L[i,:], color="k")
+            plt.title("Sample trajectory %d" % i)
+            plt.xscale("log")
+            plt.xlabel("Diffusivity")
+            plt.ylabel("Likelihood")
+            plt.show(); plt.close()
+
+    @dask.delayed
+    def _gibbs_sample(thread_idx, verbose=False):
+        """
+        Run one instance of Gibbs sampling.
+
+        args
+        ----
+            thread_idx      :   int, the index of the thread
+            verbose         :   bool, show the current iteration
+
+        returns
+        -------
+            1D ndarray of shape (K,), the estimated posterior mean
+                over state occupations.
+
+        """
+        # Draw the initial estimate for the state occupations from the prior
+        p = np.random.dirichlet(prior)
+
+        # The accumulating posterior mean
+        # mean_p = np.zeros(K, dtype=np.float64)
+        mean_n = np.zeros(K, dtype=np.float64)
+
+        # For sampling from the random state occupation vector
+        cdf = np.zeros(n_tracks, dtype=np.float64)
+        unassigned = np.ones(n_tracks, dtype=np.bool)
+        viable = np.zeros(n_tracks, dtype=np.bool)
+
+        # The total counts of each state in the state occupation vector
+        n = np.zeros(K, dtype=np.float64)
+
+        # The sequence of samples produced by the Gibbs sampler
+        samples = np.zeros((n_iter-burnin, K), dtype=np.float64)
+
+        # Sampling loop
+        for iter_idx in range(n_iter):
+
+            # Calculate the probability of each diffusive state, given each 
+            # trajectory and the current parameter values
+            T = L * p 
+
+            # Normalize over diffusivities
+            T = (T.T / T.sum(axis=1)).T 
+
+            # Draw a state occupation vector from the current set of probabilities
+            # for each diffusive state, then count the number of instances of each
+            # state among all trajectories
+            u = np.random.random(size=n_tracks)
+            unassigned[:] = True
+            cdf[:] = 0
+            n[:] = 0
+            for j in range(K):
+                cdf += T[:,j]
+                viable = np.logical_and(u<=cdf, unassigned)
+
+                # Accumulate the weight toward the jth state. This is either 
+                # proportional to the number of displacements corresponding to 
+                # trajectories that have been assigned this state (if weight_by_number_of_disps
+                # is True), or simply to the number of trajectories corresponding
+                # to this state (if weight_by_number_of_disps is False).
+                if mode == "by_displacement":
+                    n[j] = n_disps[viable].sum()
+                else:
+                    n[j] = viable.sum()
+                unassigned[viable] = False
+
+            # Whatever trajectories remain (perhaps due to floating point error), throw into the last bin
+            if mode == "by_displacement":
+                n[-1] += n_disps[unassigned].sum()
+            else:
+                n[-1] += unassigned.sum()
+
+            # Determine the posterior distribution over the state occupations
+            posterior = prior + n * damp
+
+            # Draw a new state occupation vector
+            p = np.random.dirichlet(posterior)
+
+            if diagnostic and verbose and iter_idx % 200 == 0:
+                fig, ax = plt.subplots(6, 1, figsize=(8, 10))
+                ax[0].plot(diffusivities_mid, L.sum(axis=0), color="k")
+                ax[0].set_xscale("log")
+                ax[0].set_xlabel("diffusivity")
+                ax[0].set_ylabel("naive likelihood")
+
+                ax[1].plot(diffusivities_mid, T.sum(axis=0), color="k")
+                ax[1].set_xscale("log")
+                ax[1].set_ylabel("summed likelihood")
+                ax[1].set_xlabel("Diffusivity")
+
+                ax[2].plot(diffusivities_mid, n, color="r")
+                ax[2].set_title("n")
+                ax[2].set_xlabel("Diffusivity")
+                ax[2].set_ylabel("count")
+                ax[2].set_xscale("log")
+
+                ax[3].plot(diffusivities_mid, p, color="b")
+                ax[3].set_xscale("log")
+                ax[3].set_xlabel("Diffusivity")
+                ax[3].set_ylabel("p")
+
+                ax[4].plot(diffusivities_mid, mean_p, color="k")
+                ax[4].set_xscale("log")
+                ax[4].set_xlabel("Diffusivity")
+                ax[4].set_ylabel("mean_p")
+
+                ax[5].plot(diffusivities_mid, mean_n, color="k")
+                ax[5].set_xscale("log")
+                ax[5].set_xlabel("Diffusivity")
+                ax[5].set_ylabel("mean_n")
+
+                plt.tight_layout()
+                plt.show(); plt.close()           
+
+            # If after the burnin period, accumulate this estimate into the posterior
+            # mean estimate
+            if iter_idx >= burnin:
+                # mean_p += p
+                # mean_n += n
+                samples[iter_idx-burnin, :] = n 
+
+            if verbose and iter_idx % 10 == 0:
+                sys.stdout.write("Finished with %d/%d iterations...\r" % (iter_idx, n_iter))
+                sys.stdout.flush()
+
+        # mean_p /= (n_iter - burnin)
+        # return mean_p 
+
+        # mean_n /= mean_n.sum()
+        return samples 
+
+    # Run multi-threaded if the specified number of threads is greater than 1
+    if n_threads == 1:
+        scheduler = "single-threaded"
+    else:
+        scheduler = "processes"
+    jobs = [_gibbs_sample(j, verbose=(j==0)) for j in range(n_threads)]
+    sample_sets = dask.compute(*jobs, scheduler=scheduler, num_workers=n_threads)
+    sample_sets = np.concatenate(sample_sets, axis=0).astype(np.float64)
+
+    sample_sets = sample_sets / f_remain_one_interval
+    return sample_sets, diffusivities_mid 
 
 def associate_diffusivity(tracks, track_diffusivities, diffusivity):
     """

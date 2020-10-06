@@ -8,6 +8,24 @@ import os
 import setuptools
 from zipfile import ZipFile
 
+# Build the gs_dp_diff program for evaluation of 
+# a Dirichlet process mixture model
+BIN_DIR = os.path.join(os.path.abspath(os.path.dirname(__file__)), "bin")
+SRC_DIR = os.path.join(os.path.abspath(os.path.dirname(__file__)), "src")
+try:
+    if not os.path.isdir(BIN_DIR):
+        os.mkdir(BIN_DIR)
+    if os.path.isfile("/usr/local/bin/gs_dp_diff"):
+        os.remove("/usr/local/bin/gs_dp_diff")
+    os.system("make -f {}".format(os.path.join(SRC_DIR, "makefile")))
+    os.rename(
+        os.path.join(SRC_DIR, "gs_dp_diff"),
+        os.path.join(BIN_DIR, "gs_dp_diff")
+    )
+    os.system("ln -s {} /usr/local/bin/gs_dp_diff".format(os.path.join(BIN_DIR, "gs_dp_diff")))
+except:
+    print("WARNING: gs_dp_diff not installed")
+
 # Unzip large data files
 REPO_DIR = os.path.split(os.path.abspath(__file__))[0]
 DATA_DIR = os.path.join(REPO_DIR, "strobemodels", "data")
