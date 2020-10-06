@@ -37,17 +37,21 @@ import os
 import sys
 import numpy as np
 import pandas as pd 
+import dask 
 
-def gs_dp_log_diff(tracks, diffusivity_bin_edges, alpha=2.0, m=30,
+from strobemodels.utils import defoc_prob_brownian, track_length
+from strobemodels.specdiffuse import rad_disp_squared
+
+def gs_dp_log_diff(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
     m0=30, n_iter=1000, burnin=20, frame_interval=0.01,
-    pixel_size_um=1.0, max_jumps_per_track=10, min_jumps_per_track=1,
+    pixel_size_um=1.0, max_jumps_per_track=20, min_jumps_per_track=1,
     B=10000, metropolis_sigma=0.1):
 
     raise NotImplementedError
 
-def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=2.0, m=30,
+def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
     m0=30, n_iter=1000, burnin=20, frame_interval=0.01, pixel_size_um=1.0, 
-    max_jumps_per_track=10, min_jumps_per_track=1, B=10000, 
+    max_jumps_per_track=20, min_jumps_per_track=1, B=10000, 
     metropolis_sigma=0.1, num_workers=6):
     """
     Given a set of trajectories and a log-uniform prior, estimate the
