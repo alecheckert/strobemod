@@ -286,10 +286,10 @@ int main (int argc, char *argv[]) {
     for (ci=0; ci<B; ci++) {
         if (c_occs[ci] > 0) {
             c_active[ci] = true;
-            c_log_occs[ci] = std::log(std::max(max_occ_weight, c_occs[ci]));
+            c_log_occs[ci] = std::log(std::min(max_occ_weight, c_occs[ci]));
         } else {
             c_active[ci] = false;
-            c_log_occs[ci] = 1;
+            c_log_occs[ci] = 0;
         }
     }
 
@@ -325,7 +325,7 @@ int main (int argc, char *argv[]) {
             if (c_occs[ci] == 0) {
                 c_active[ci] = false;
             } else {
-                c_log_occs[ci] = std::log(std::max(max_occ_weight, c_occs[ci]));
+                c_log_occs[ci] = std::log(std::min(max_occ_weight, c_occs[ci]));
             }
 
             // Choose whether to have this trajectory start a new markov chain
@@ -337,7 +337,7 @@ int main (int argc, char *argv[]) {
                 c_active[ci] = true;
                 components[i] = ci;
                 c_occs[ci] = track_n_disps;
-                c_log_occs[ci] = std::log(track_n_disps);
+                c_log_occs[ci] = std::log(std::min(max_occ_weight, track_n_disps));
 
                 // Choose the new component's diffusivity. Consider *m* candidates
                 // drawn from the prior, and weight each candidate by its likelihood
@@ -395,7 +395,7 @@ int main (int argc, char *argv[]) {
 
                 // Update the occupation count for this component
                 c_occs[ci] += track_n_disps;
-                c_log_occs[ci] = std::log(std::max(max_occ_weight, c_occs[ci]));
+                c_log_occs[ci] = std::log(std::min(max_occ_weight, c_occs[ci]));
             }
         }
 
