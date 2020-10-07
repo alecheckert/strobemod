@@ -43,8 +43,8 @@ following specification:
 #include <getopt.h>
 #include <libgen.h>
 
-#define OPTSTR "a:n:b:m:t:s:c:d:z:e:x:l:i:vh"
-#define USAGE_FMT " [-a alpha] [-n n_iter] [-b burnin] [-m n_aux] [-t frame_interval] [-s metropolis_sigma] [-c min_log_D] [-d max_log_D] [-z buffer_size] [-e seed] [-x max_occ_weight] [-l loc_error] [-i bias_csv] [-v verbose] [-h help] IN_CSV OUT_CSV"
+#define OPTSTR "a:n:b:m:t:s:c:d:z:e:x:l:vh"
+#define USAGE_FMT " [-a alpha] [-n n_iter] [-b burnin] [-m n_aux] [-t frame_interval] [-s metropolis_sigma] [-c min_log_D] [-d max_log_D] [-z buffer_size] [-e seed] [-x max_occ_weight] [-l loc_error] [-v verbose] [-h help] IN_CSV OUT_CSV"
 
 void usage(char *progname, int opt);
 
@@ -74,8 +74,6 @@ int main (int argc, char *argv[]) {
     bool verbose = false;
     int max_occ_weight = 5;
     double loc_error = 0.0;
-    char bias_csv [300];
-    bool correct_bias = false;
 
     int opt;
     while (( opt = getopt(argc, argv, OPTSTR)) != -1) {
@@ -115,10 +113,6 @@ int main (int argc, char *argv[]) {
                 break;
             case 'l':
                 loc_error = std::stod(optarg);
-                break;
-            case 'i':
-                std::strcpy(bias_csv, optarg);
-                correct_bias = true;
                 break;
             case 'v':
                 verbose = true;
@@ -215,9 +209,6 @@ int main (int argc, char *argv[]) {
         return 1;
     }
     delete [] str_buffer;
-
-    // Read the bias CSV if applicable. These are essentially modifiers
-    // to the probability of each component that depend on its diffusivity.
 
     // Probability for each trajectory to start a new component at each 
     // iteration
@@ -475,6 +466,7 @@ int main (int argc, char *argv[]) {
     }
 
     f_out.close();
+
 
     // Deallocate
     delete [] c_occs;
