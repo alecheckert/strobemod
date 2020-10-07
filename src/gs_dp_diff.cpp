@@ -43,8 +43,8 @@ following specification:
 #include <getopt.h>
 #include <libgen.h>
 
-#define OPTSTR "a:n:b:m:t:s:c:d:z:e:x:vh"
-#define USAGE_FMT " [-a alpha] [-n n_iter] [-b burnin] [-m n_aux] [-t frame_interval] [-s metropolis_sigma] [-c min_log_D] [-d max_log_D] [-z buffer_size] [-e seed] [-x max_occ_weight] [-v verbose] [-h help] IN_CSV OUT_CSV"
+#define OPTSTR "a:n:b:m:t:s:c:d:z:e:x:l:i:vh"
+#define USAGE_FMT " [-a alpha] [-n n_iter] [-b burnin] [-m n_aux] [-t frame_interval] [-s metropolis_sigma] [-c min_log_D] [-d max_log_D] [-z buffer_size] [-e seed] [-x max_occ_weight] [-l loc_error] [-i bias_csv] [-v verbose] [-h help] IN_CSV OUT_CSV"
 
 void usage(char *progname, int opt);
 
@@ -73,7 +73,10 @@ int main (int argc, char *argv[]) {
     double max_log_L, p;
     bool verbose = false;
     int max_occ_weight = 5;
-    
+    double loc_error = 0.0;
+    char bias_csv [300];
+    bool correct_bias = false;
+
     int opt;
     while (( opt = getopt(argc, argv, OPTSTR)) != -1) {
         switch (opt) {
@@ -110,6 +113,13 @@ int main (int argc, char *argv[]) {
             case 'x':
                 max_occ_weight = std::stoi(optarg);
                 break;
+            case 'l':
+                loc_error = std::stod(optarg);
+                break;
+            case 'i':
+                std::strcpy(bias_csv, optarg);
+                correct_bias = true;
+                break;
             case 'v':
                 verbose = true;
                 break;
@@ -142,6 +152,9 @@ int main (int argc, char *argv[]) {
     int *components, *n_disps;
     double *ss;
     double log_L_ratio, exp_proposed, track_ss, proposed, curr, log_p;
+
+    // 2 * (1D spatial variance) due to localization error
+    double le2 = 4 * loc_error * loc_error;
 
     // Prior distribution
     double min_log_4Dt = min_log_D + std::log(4.0 * frame_interval);
@@ -203,6 +216,9 @@ int main (int argc, char *argv[]) {
     }
     delete [] str_buffer;
 
+    // Read the bias CSV if applicable. These are essentially modifiers
+    // to the probability of each component that depend on its diffusivity.
+
     // Probability for each trajectory to start a new component at each 
     // iteration
     double branch_prob = alpha / (alpha + (double) n_tracks);
@@ -245,7 +261,7 @@ int main (int argc, char *argv[]) {
 
     // Activate *m0* initial components for this mixture
     for (i=0; i<m0; i++) {
-        c_params[i] = prior(generator);
+        c_params[i] = std::log(std::exp(prior(generator)) + le2);
         c_exp_params[i] = std::exp(-c_params[i]);
     }
 
@@ -259,7 +275,7 @@ int main (int argc, char *argv[]) {
         // Calculate the likelihood of each of the log diffusivities 
         // given this trajectory
         for (ci=0; ci<m0; ci++) {
-            log_L[ci] = -ss[i] * std::exp(-c_params[ci]) - 
+            log_L[ci] = -ss[i] * c_exp_params[ci] - 
                 n_disps[i] * c_params[ci];
         }
 
@@ -343,7 +359,7 @@ int main (int argc, char *argv[]) {
                 // drawn from the prior, and weight each candidate by its likelihood
                 // given the present trajectory.
                 for (j=0; j<m; j++) {
-                    candidate_params[j] = prior(generator);
+                    candidate_params[j] = std::log(std::exp(prior(generator)) + le2);
                     candidate_log_L[j] = -track_ss * std::exp(-candidate_params[j]) - 
                         track_n_disps * candidate_params[j];
                 }
@@ -399,25 +415,30 @@ int main (int argc, char *argv[]) {
             }
         }
 
-        // For each of the active components, update the corresponding 
+        // For each of the active components, resample the corresponding 
         // log diffusivity using a Metropolis-Hastings step.
         for (ci=0; ci<B; ci++) {
             if (c_active[ci]) {
 
-                // Current value of this parameter
+                // Current log diffusivity of this parameter
                 curr = c_params[ci];
 
-                // Add a random nudge, making sure not to go below
-                // the minimum permissible diffusivity
-                proposed = curr + metropolis_nudge(generator);
-                while (proposed < min_log_4Dt) {
-                    proposed = curr + metropolis_nudge(generator);
+                // Add a random nudge, making sure not to go outside
+                // the minimum or maximum permissible diffusivities
+                // proposed = curr + metropolis_nudge(generator);
+                proposed = std::log(std::exp(curr) - le2) + metropolis_nudge(generator);
+                while ((proposed < min_log_4Dt) or (proposed > max_log_4Dt)) {
+                    // proposed = curr + metropolis_nudge(generator);
+                    proposed = std::log(std::exp(curr) - le2) + metropolis_nudge(generator);
                 }
+
+                // Account for localization error
+                proposed = std::log(std::exp(proposed) + le2);
+                exp_proposed = std::exp(-proposed);
 
                 // Compute the log likelihood ratio between the proposed
                 // and current diffusivity
                 log_L_ratio = 0.0;
-                exp_proposed = std::exp(-proposed);
 
                 for (i=0; i<n_tracks; i++) {
                     if (components[i] == ci) {

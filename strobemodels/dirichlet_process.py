@@ -35,8 +35,10 @@ for more details.
 """
 import os
 import sys
+import time
 import numpy as np
 import pandas as pd 
+import matplotlib.pyplot as plt 
 import dask 
 
 from strobemodels.utils import defoc_prob_brownian, track_length
@@ -52,7 +54,8 @@ def gs_dp_log_diff(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
 def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
     m0=30, n_iter=1000, burnin=20, frame_interval=0.01, pixel_size_um=1.0, 
     max_jumps_per_track=20, min_jumps_per_track=1, B=10000, 
-    metropolis_sigma=0.1, num_workers=6, max_occ_weight=5):
+    metropolis_sigma=0.1, num_workers=6, max_occ_weight=5, loc_error=0.0,
+    dz=None):
     """
     Given a set of trajectories and a log-uniform prior, estimate the
     posterior distribution of diffusivities.
@@ -137,6 +140,17 @@ def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
         num_workers             :   int, the number of threads to use. Each
                                     thread runs an independent replicate.
 
+        max_occ_weight          :   int, the maximum number of displacements 
+                                    to use for weighting the current occupation
+                                    of any given component.
+
+        loc_error               :   float, the 1D localization error in um
+
+        dz                      :   float, the depth of field in um. If *np.inf*
+                                    or *None*, then the microscope is assumed
+                                    to gather trajectories without any 
+                                    defocalization bias.
+
     returns
     -------
         1D ndarray of shape (n_bins,), the integrated density of Markov
@@ -216,8 +230,9 @@ def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
             burnin=burnin,
             min_log_D=min_log_D,
             max_log_D=max_log_D,
-            seed=(i * 1777) % 373,
-            max_occ_weight=max_occ_weight
+            seed=int((time.perf_counter()+i)*1777)%373,
+            max_occ_weight=max_occ_weight,
+            loc_error=loc_error
         ))
 
 
@@ -233,7 +248,7 @@ def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
         # Read the output and discretize the posterior density of
         # Markov chains into a histogram
         df = pd.read_csv("_TEMP_OUT_{}.csv".format(i), header=None)
-        df["D"] = np.exp(df[0] - np.log(4 * frame_interval))
+        df["D"] = (np.exp(df[0]) - 4 * (loc_error**2)) / (4 * frame_interval)
         H = np.histogram(df["D"], bins=diffusivity_bin_edges,
             weights=df[1])[0].astype(np.float64)
 
@@ -250,6 +265,19 @@ def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
 
     # Aggregate results
     record = np.asarray(results).sum(axis=0)
+
+    # Correct for defocalization biases
+    Ds = np.sqrt(diffusivity_bin_edges[1:] * diffusivity_bin_edges[:-1])
+    plt.plot(Ds, record, color='k'); plt.xscale('log'); plt.show(); plt.close()
+    if (not dz is None) and (not dz is np.inf):
+        f_remain = np.zeros(n_bins, dtype=np.float64)
+        Ds = np.sqrt(diffusivity_bin_edges[1:] * diffusivity_bin_edges[:-1])
+        for i, D in enumerate(Ds):
+            f_remain[i] = defoc_prob_brownian(D, min_jumps_per_track,
+                frame_interval, dz, n_gaps=0)[-1]
+        nonzero = record > 0
+        record[nonzero] = record[nonzero] / f_remain[nonzero]
+    plt.plot(Ds, record, color='k'); plt.xscale('log'); plt.show(); plt.close()
 
     # Clean up
     if os.path.isfile(track_csv):
@@ -295,7 +323,8 @@ def format_cl_args(in_csv, out_csv, verbose=False, **kwargs):
         "min_log_D": "c",
         "max_log_D": "d",
         "seed": "e",
-        "max_occ_weight": "x"
+        "max_occ_weight": "x",
+        "loc_error": "l"
     }
     optstr = " ".join(["-{} {}".format(str(keymap.get(k)), str(kwargs.get(k))) \
         for k in kwargs.keys() if k in keymap.keys()])
