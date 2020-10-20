@@ -38,6 +38,10 @@ from .utils import (
     track_length
 )
 
+# Default support on which to evaluate diffusivity occupations
+DEFAULT_DIFFUSIVITIES = np.logspace(-2.0, 2.0, 301)
+
+
 def expect_max(data, likelihood, diffusivities, n_iter=1000, **kwargs):
     """
     Use expectation-maximization algorithm to estimate the state occupations
@@ -284,6 +288,8 @@ def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
     diffusivities = np.asarray(diffusivities)
     K = diffusivities.shape[0]
     le2 = loc_error ** 2
+    if max_jumps_per_track is None:
+        max_jumps_per_track = np.inf 
     assert likelihood_mode in ["point", "binned", "binned_reg"]
 
     # If using the entire track, set n_frames to the longest trajectory
@@ -609,18 +615,76 @@ def gsdiff_subsample(tracks, diffusivities, n_partitions=6, subsample_size=0.3,
     posterior_means /= posterior_means.sum()
     return posterior_means, diffusivities_mid 
 
-
-def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
-    use_entire_track=True, max_jumps_per_track=np.inf, min_jumps_per_track=1,
-    frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0, dz=np.inf,
-    verbose=True, pseudocounts=1, n_threads=1, track_diffusivities_out_csv=None,
-    mode="by_displacement", defoc_corr="first_only", damp=0.1, diagnostic=True,
-    likelihood_mode="binned", start_frame=0, max_weight=np.inf):
+def gsdiff(tracks, diffusivities=None, prior=None, n_iter=1000, burnin=20,
+    n_threads=1, frame_interval=0.01, loc_error=0.0, pixel_size_um=0.16,
+    dz=np.inf, pseudocounts=2, max_weight=1, damp=1.0, use_entire_track=True,
+    max_jumps_per_track=np.inf, min_jumps_per_track=1, verbose=True, 
+    mode="by_displacement", likelihood_mode="binned", start_frame=0,
+    diagnostic=False, track_diffusivities_out_csv=None):
     """
     Estimate a distribution of diffusivities from a set of trajectories 
     using Gibbs sampling.
 
+    args
+    ----
+        tracks          :   pandas.DataFrame, trajectories. Must contain
+                            the "frame", "trajectory", "y", and "x" columns
+        diffusivities   :   1D ndarray of shape K+1, the edges of the diffusivity bins
+                            in um^2 s^-1
+        prior           :   1D ndarray of shape (K), the prior distribution
+                            over the diffusivity bins 
+        n_iter          :   int, number of iterations to run
+        burnin          :   int, the minimum number of iterations to run 
+                            before starting to record the results
+        use_entire_track:   bool, use every jump from every trajectory
+        max_jumps_per_track: int, if not *use_entire_track*, the max number of 
+                            jumps to consider per track
+        min_jumps_per_track: int, the minimum number of jumps to consider per
+                            track
+        frame_interval  :   float, time between frames in seconds
+        loc_error       :   float, estimated 1D localization error in um
+        pixel_size_um   :   float, size of pixels in um
+        dz              :   float, depth of field
+        verbose         :   bool
+        pseudocounts    :   int, the relative weight of the prior. 1 is a noninformative
+                            prior.
+        n_threads       :   int, the number of parallel threads to run
+        track_diffusivities_out_csv     :   str, path to a CSV at which to
+                            save the likelihood of each diffusivity bin for
+                            each trajectory in the dataset. Potentially large.
+        mode            :   str, either "by_displacement" or "by_trajectory", 
+                            the meaning of the counts in the posterior distribution.
+                            Unless you have a good reason, use "by_displacement".
+        damp            :   float, the relative statistical weight of each 
+                            displacement/trajectory. Lower is more conservative.
+        diagnostic      :   bool, make some diagnostic reports for debugging
+        likelihood_mode :   str, either "binned", "point", or "binned_reg", the
+                            type of likelihood function for the diffusivity
+                            bins. "binned" is a good default.
+        start_frame     :   int, disregard displacements before this frame
+        max_weight      :   int, the maximum weight to give trajectories 
+                            when building the intermediate sampling distributions
+                            over the diffusivity bins. While the "correct" approach
+                            is to give each trajectory a weight proportional to the
+                            observed number of displacements in that trajectory,
+                            in practice this can be a little too confident and a 
+                            few trajectories can end up dominating the data. On the
+                            other hand, max_weight = 1 is very conservative, only 
+                            calling diffusivity peaks when they are extremely well
+                            supported by many trajectories.
+
+    returns
+    -------
+        (
+            2D ndarray of shape (n_threads, K), the posterior means over
+                the diffusivity bins for each thread;
+            1D ndarray of shape (K), the geometric means of each 
+                diffusivity bin
+        )
+
     """
+    if diffusivities is None:
+        diffusivities = DEFAULT_DIFFUSIVITIES
     diffusivities = np.asarray(diffusivities)
 
     # Treat the diffusivities array as bin edges, with the center of 
@@ -644,7 +708,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             frame_interval=frame_interval, dz=dz, n_gaps=0)[-1]
 
     # Choose the prior
-    if dz is np.inf:
+    if dz is np.inf or dz is None:
         prior = np.ones(K, dtype=np.float64) * pseudocounts 
     else:
         prior = f_remain_one_interval * pseudocounts / f_remain_one_interval.max()
@@ -673,7 +737,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         for j in range(2):
             ax[j].set_xscale("log")
             ax[j].set_ylabel("likelihood")
-            ax[j].set_xlabel("Diffusivity ($\mu$m$^{2}$ s$^{-1}$")
+            ax[j].set_xlabel("Diffusivity ($\mu$m$^{2}$ s$^{-1}$)")
         ax[0].set_title("Summed across trajectories")
         ax[1].set_title("Summed across trajectories and weighted by # disps")
         plt.tight_layout(); plt.show(); plt.close()
@@ -764,6 +828,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
 
             # Determine the posterior distribution over the state occupations
             posterior = prior + n_red * damp 
+            # posterior = prior + np.minimum(n*damp, max_weight) # EXPERIMENTAL
 
             # Draw a new state occupation vector
             p = np.random.dirichlet(posterior)
