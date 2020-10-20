@@ -45,6 +45,9 @@ import dask
 from strobemodels.utils import defoc_prob_brownian, track_length
 from strobemodels.specdiffuse import rad_disp_squared
 
+# Default diffusivity binning scheme
+DEFAULT_DIFFUSIVITY_BIN_EDGES = np.logspace(-2.0, 2.0, 301)
+
 def gs_dp_log_diff(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
     m0=30, n_iter=1000, burnin=20, frame_interval=0.01,
     pixel_size_um=1.0, max_jumps_per_track=20, min_jumps_per_track=1,
@@ -52,10 +55,10 @@ def gs_dp_log_diff(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
 
     raise NotImplementedError
 
-def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
-    m0=30, n_iter=1000, burnin=20, frame_interval=0.01, pixel_size_um=1.0, 
+def gs_dp_log_diff_par(tracks, diffusivity_bin_edges=None, alpha=10.0, m=10,
+    m0=30, n_iter=200, burnin=20, frame_interval=0.00748, pixel_size_um=0.16, 
     max_jumps_per_track=None, min_jumps_per_track=1, B=10000, 
-    metropolis_sigma=0.1, num_workers=6, max_occ_weight=5, loc_error=0.0,
+    metropolis_sigma=0.2, num_workers=6, max_occ_weight=1, loc_error=0.0,
     dz=None, incorp_defoc_likelihoods=False):
     """
     Given a set of trajectories and a log-uniform prior, estimate the
@@ -167,6 +170,11 @@ def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
     """
     # Check that the gs_dp_diff executable exists
     assert_gs_dp_diff_exists(incorp_defoc_likelihoods)
+
+    # If not given a binning scheme for the diffusivity, use the 
+    # default scheme
+    if diffusivity_bin_edges is None:
+        diffusivity_bin_edges = DEFAULT_DIFFUSIVITY_BIN_EDGES
 
     # The minimum and maximum log (diffusivity) to consider
     min_log_D = np.log(diffusivity_bin_edges.min())
