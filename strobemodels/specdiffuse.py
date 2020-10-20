@@ -140,7 +140,7 @@ def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0,
         tracks = tracks[tracks['frame'] >= start_frame]
 
     # Convert from pixels to um
-    tracks[['y', 'x']] *= pixel_size_um 
+    tracks[['y', 'x']] = tracks[['y', 'x']] * pixel_size_um 
 
     # Throw out all points in each trajectory after the first *n_frames+1*,
     # so that we have a maximum of *n_frames* displacements in the resulting
@@ -323,8 +323,8 @@ def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
 
         # Evaluate the log likelihood of each diffusivity, given each trajectory
         for j, D in enumerate(diffusivities):
-            L[:,j] = np.asarray(log_ss - L_cond["sum_squared_disp"] / (4*D*frame_interval) - \
-                    n_disps * np.log(4*D*frame_interval) - log_gamma_n_disps)
+            L[:,j] = np.asarray(log_ss - L_cond["sum_squared_disp"] / (4*(D*frame_interval+le2)) - \
+                    n_disps * np.log(4*(D*frame_interval+le2)) - log_gamma_n_disps)
 
         # Regularize the problem by subtracting the largest log likelihood 
         # across all diffusivities (for each trajectory), which ensures that 
@@ -615,7 +615,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0, dz=np.inf,
     verbose=True, pseudocounts=1, n_threads=1, track_diffusivities_out_csv=None,
     mode="by_displacement", defoc_corr="first_only", damp=0.1, diagnostic=True,
-    likelihood_mode="binned", start_frame=0):
+    likelihood_mode="binned", start_frame=0, max_weight=np.inf):
     """
     Estimate a distribution of diffusivities from a set of trajectories 
     using Gibbs sampling.
@@ -715,6 +715,10 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         # The total counts of each state in the state occupation vector
         n = np.zeros(K, dtype=np.float64)
 
+        # The effective counts of each state in the state occupation vector,
+        # for the purposes of damping the contribution of any one trajectory
+        n_red = np.zeros(K, dtype=np.float64)
+
         # The sequence of samples produced by the Gibbs sampler
         samples = np.zeros((n_iter-burnin, K), dtype=np.float64)
 
@@ -723,7 +727,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
 
             # Calculate the probability of each diffusive state, given each 
             # trajectory and the current parameter values
-            T = L * p 
+            T = L * p
 
             # Normalize over diffusivities
             T = (T.T / T.sum(axis=1)).T 
@@ -746,6 +750,7 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
                 # to this state (if weight_by_number_of_disps is False).
                 if mode == "by_displacement":
                     n[j] = n_disps[viable].sum()
+                    n_red[j] = np.minimum(n_disps[viable], max_weight).sum()
                 else:
                     n[j] = viable.sum()
                 unassigned[viable] = False
@@ -753,11 +758,12 @@ def gsdiff(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             # Whatever trajectories remain (perhaps due to floating point error), throw into the last bin
             if mode == "by_displacement":
                 n[-1] += n_disps[unassigned].sum()
+                n_red[-1] += np.minimum(n_disps[unassigned], max_weight).sum()
             else:
                 n[-1] += unassigned.sum()
 
             # Determine the posterior distribution over the state occupations
-            posterior = prior + n * damp
+            posterior = prior + n_red * damp 
 
             # Draw a new state occupation vector
             p = np.random.dirichlet(posterior)

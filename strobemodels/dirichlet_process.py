@@ -185,7 +185,7 @@ def gs_dp_log_diff_par(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
 
     # If not using a cap on the number of jumps per trajectory, use
     # every jump from every trajectory
-    if max_jumps_per_track is None:
+    if (max_jumps_per_track is None) or (max_jumps_per_track is np.inf):
         n_frames = int(tracks["track_length"].max())
     else:
         n_frames = min(tracks["track_length"].max(), max_jumps_per_track+1)
