@@ -78,6 +78,7 @@ int main (int argc, char *argv[]) {
     double loc_error = 0.0;
     char bias_csv [300];
     bool correct_bias = false;
+    int metropolis_steps_per_iter = 5;
 
     int opt;
     while (( opt = getopt(argc, argv, OPTSTR)) != -1) {
@@ -153,10 +154,13 @@ int main (int argc, char *argv[]) {
     char *pch;
     int *components, *n_disps;
     double *ss, *log_d_corr_val, *bias_terms;
-    double log_L_ratio, exp_proposed, track_ss, proposed, curr, log_p;
+    double log_L_ratio, exp_proposed, track_ss, proposed, proposed_with_err, curr, log_p;
 
     // 2 * (1D spatial variance) due to localization error
     double le2 = 4 * loc_error * loc_error;
+
+    // Factor necessary for the Metropolis acceptance distribution
+    double sqrt_metropolis_var = std::sqrt(2.0) * metropolis_sigma;
 
     // Prior distribution
     double min_log_4Dt = min_log_D + std::log(4.0 * frame_interval);
@@ -490,44 +494,54 @@ int main (int argc, char *argv[]) {
         for (ci=0; ci<B; ci++) {
             if (c_active[ci]) {
 
-                // Current log diffusivity of this parameter
-                curr = c_params[ci];
+                for (int step_idx=0; step_idx<metropolis_steps_per_iter; step_idx++) {
 
-                // Add a random nudge, making sure not to go outside
-                // the minimum or maximum permissible diffusivities
-                // proposed = curr + metropolis_nudge(generator);
-                proposed = std::log(std::exp(curr) - le2) + metropolis_nudge(generator);
-                while ((proposed < min_log_4Dt) or (proposed > max_log_4Dt)) {
+                    // Current log diffusivity of this parameter
+                    curr = c_params[ci];
+
+                    // Add a random nudge, making sure not to go outside
+                    // the minimum or maximum permissible diffusivities
                     // proposed = curr + metropolis_nudge(generator);
                     proposed = std::log(std::exp(curr) - le2) + metropolis_nudge(generator);
-                }
-
-                // Account for localization error
-                proposed = std::log(std::exp(proposed) + le2);
-                exp_proposed = std::exp(-proposed);
-
-                // Compute the log likelihood ratio between the proposed
-                // and current diffusivity
-                 log_L_ratio = 0.0;
-                // if (correct_bias) {
-                //     log_L_ratio = + argmatch(n_D_corr_val, proposed, log_d_corr_val, bias_terms) -  
-                //         argmatch(n_D_corr_val, c_params[ci], log_d_corr_val, bias_terms);
-                // } else {
-                //     log_L_ratio = 0.0;
-                // }
-
-                for (i=0; i<n_tracks; i++) {
-                    if (components[i] == ci) {
-                        log_L_ratio += -ss[i] * exp_proposed - n_disps[i] * proposed;
-                        log_L_ratio -= (-ss[i] * c_exp_params[ci] - n_disps[i] * c_params[ci]);
+                    while ((proposed < min_log_4Dt) or (proposed > max_log_4Dt)) {
+                        // proposed = curr + metropolis_nudge(generator);
+                        proposed = std::log(std::exp(curr) - le2) + metropolis_nudge(generator);
                     }
-                }
 
-                // Determine whether to accept the update
-                p = std::log(random_prob(generator));
-                if (log_p < log_L_ratio) {
-                    c_params[ci] = proposed;
-                    c_exp_params[ci] = exp_proposed;
+                    // Account for localization error
+                    proposed_with_err = std::log(std::exp(proposed) + le2);
+                    exp_proposed = std::exp(-proposed_with_err);
+
+                    // Compute the log likelihood ratio between the proposed
+                    // and current diffusivity
+                    log_L_ratio = 0.0;
+                    // if (correct_bias) {
+                    //     log_L_ratio = + argmatch(n_D_corr_val, proposed, log_d_corr_val, bias_terms) -  
+                    //         argmatch(n_D_corr_val, c_params[ci], log_d_corr_val, bias_terms);
+                    // } else {
+                    //     log_L_ratio = 0.0;
+                    // }
+
+                    for (i=0; i<n_tracks; i++) {
+                        if (components[i] == ci) {
+                            log_L_ratio += -ss[i] * exp_proposed - n_disps[i] * proposed_with_err;
+                            log_L_ratio -= (-ss[i] * c_exp_params[ci] - n_disps[i] * c_params[ci]);
+                        }
+                    }
+
+                    // Modify the log likelihood ratio to make the chain ergodic on 
+                    // the limited support
+                    log_L_ratio += std::log((std::erf((max_log_4Dt - curr) / sqrt_metropolis_var) - 
+                        std::erf((min_log_4Dt - curr) / sqrt_metropolis_var)));
+                    log_L_ratio -= std::log((std::erf((max_log_4Dt - proposed) / sqrt_metropolis_var) - 
+                        std::erf((min_log_4Dt - proposed) / sqrt_metropolis_var)));                   
+
+                    // Determine whether to accept the update
+                    p = std::log(random_prob(generator));
+                    if (log_p < log_L_ratio) {
+                        c_params[ci] = proposed_with_err;
+                        c_exp_params[ci] = exp_proposed;
+                    }
                 }
             }
         }
