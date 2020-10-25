@@ -126,7 +126,7 @@ def plot_jump_length_pmf(bin_edges, pmfs, model_pmfs=None, model_bin_edges=None,
     # Only show jumps up to the max jump length 
     if not max_jump is None:
         axes[0].set_xlim((0, max_jump))
-    axes[-1].set_xlabel("Jump length ($\mu$m)", fontsize=10)
+    axes[-1].set_xlabel("2D radial displacement ($\mu$m)", fontsize=10)
 
     # Save to a file, if desired
     if not out_png is None:

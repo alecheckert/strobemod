@@ -44,6 +44,9 @@ import dask
 
 from strobemodels.utils import defoc_prob_brownian, track_length
 from strobemodels.specdiffuse import rad_disp_squared
+from .specdiffuse import (
+    evaluate_diffusivity_likelihoods_on_tracks
+)
 
 # Default diffusivity binning scheme
 DEFAULT_DIFFUSIVITY_BIN_EDGES = np.logspace(-2.0, 2.0, 301)
@@ -52,7 +55,6 @@ def gs_dp_log_diff(tracks, diffusivity_bin_edges, alpha=10.0, m=10,
     m0=30, n_iter=1000, burnin=20, frame_interval=0.01,
     pixel_size_um=1.0, max_jumps_per_track=20, min_jumps_per_track=1,
     B=10000, metropolis_sigma=0.1):
-
     raise NotImplementedError
 
 def gs_dp_log_diff_par(tracks, diffusivity_bin_edges=None, alpha=10.0, m=10,
@@ -334,9 +336,13 @@ def gs_dp_log_diff_par(tracks, diffusivity_bin_edges=None, alpha=10.0, m=10,
         if os.path.isfile(fn):
             os.remove(fn)
 
+    # Take the geometric mean of each diffusivity bin
+    diffusivities_mid = np.sqrt(diffusivity_bin_edges[1:] * \
+        diffusivity_bin_edges[:-1])
+
     # Return the posterior sum of Markov chain densities across
     # all threads
-    return record
+    return record, diffusivities_mid
 
 def format_cl_args(in_csv, out_csv, verbose=False, **kwargs):
     """
@@ -348,8 +354,7 @@ def format_cl_args(in_csv, out_csv, verbose=False, **kwargs):
     ----
         in_csv          :   str, path to a CSV with the summed squared 
                             displacements and the number of displacements
-                            for each trajectory
-        out_csv         :   str, path to the output CSV
+                            for each trajectory out_csv         :   str, path to the output CSV
         verbose         :   str, use the verbose option
         kwargs          :   keyword arguments passed to gs_dp_log_diff_par
                             relevant to the gs_dp_diff call
@@ -409,3 +414,96 @@ def assert_gs_dp_diff_exists(incorp_defoc_likelihoods=False):
             (os.access("gs_dp_diff", os.X_OK)):
             raise RuntimeError("gs_dp_log_diff_par: must have a compiled " \
                 "version of gs_dp_diff in PATH")
+
+def evaluate_model_on_nuclei(csv_files, diffusivity_bin_edges,
+    model_posterior_mean=None, frame_interval=0.00748, loc_error=0.0,
+    pixel_size_um=0.16, dz=None, use_entire_track=True,
+    max_jumps_per_track=np.inf, start_frame=0, out_plot=None):
+    """
+    Evaluate a diffusivity model on several files from a dataset,
+    optionally producing a plot that shows the likelihood of each 
+    diffusive state as a function of the specific files.
+
+    args
+    ----
+        csv_files               :   list of str, paths to trajectory files
+        diffusivity_bin_edges   :   1D ndarray of shape (K+1,), the 
+                                    edges of each diffusivity bin
+        model_posterior_mean    :   1D ndarray of shape (K), the occupations
+                                    of each diffusivity bin. If *None*,
+                                    then each bin is given equal weight.
+        frame_interval          :   float, time between frames in seconds
+        loc_error               :   float, localization error in um
+        pixel_size_um           :   float, size of pixels in um
+        dz                      :   float, focal depth in um
+        use_entire_track        :   bool, use every displacement from 
+                                    every track
+        max_jumps_per_track     :   int, the maximum number of displacements
+                                    to use from each track if *use_entire_track*
+                                    is False
+        start_frame             :   int, only consider trajectories after
+                                    this frame
+        out_plot                :   str, path to a PNG to save a summary
+                                    plot of the result
+
+    returns
+    -------
+        2D ndarray of shape (n_files, K), the summed likelihood
+            of each diffusivity bin for each file
+
+    """
+    n = len(csv_files)
+    K = diffusivity_bin_edges.shape[0] - 1
+    L_by_file = np.zeros((n, K), dtype=np.float64)
+    if model_posterior_mean is None:
+        model_posterior_mean = np.ones(K)
+
+    for i, csv_file in enumerate(csv_files):
+        tracks = pd.read_csv(csv_file)
+        tracks = tracks[tracks["frame"] >= start_frame]
+        tracks = track_length(tracks)
+        tracks = tracks[tracks["track_length"] > 1]
+        tracks["source_file"] = csv_file 
+        L, diff_cols = evaluate_diffusivity_likelihoods_on_tracks(
+            tracks, diffusivity_bin_edges, model_posterior_mean, 
+            frame_interval=frame_interval, loc_error=loc_error,
+            pixel_size_um=pixel_size_um, dz=dz, use_entire_track=use_entire_track,
+            max_jumps_per_track=max_jumps_per_track, likelihood_mode="binned",
+            norm=True, map_columns=["source_file"])
+
+        L["n_disps"] = L["track_length"] - 1
+        for j, c in enumerate(diff_cols):
+            L[c] = L[c] * L["n_disps"]
+            L_by_file[i,j] = L[c].mean()
+
+        print("Finished with {}".format(csv_file))
+
+    L_by_file = (L_by_file.T / L_by_file.sum(axis=1)).T
+
+    if not out_plot is None:
+
+        fig, ax = plt.subplots(figsize=(4, 2))
+        y_ext = 0.2 * n 
+        x_ext = 5.0
+        fontsize = 8
+        s = ax.imshow(L_by_file, vmin=0, extent=(0, x_ext, 0, y_ext))
+        cbar = plt.colorbar(s, ax=ax, shrink=0.8)
+        cbar.ax.tick_params(labelsize=fontsize)
+        ax.set_yticks([])
+        ax.set_ylabel("Nucleus", fontsize=fontsize)
+        diff_mid = np.sqrt(diffusivity_bin_edges[:-1] * diffusivity_bin_edges[1:])
+        spacer = 40
+        tick_locs = np.arange(K)[::spacer] * x_ext / K
+        tick_labels = ["%.2f" % j for j in diff_mid[::spacer]]
+        ax.set_xticks(tick_locs)
+        ax.set_xticklabels(tick_labels, fontsize=fontsize)
+        ax.set_xlabel("Diffusivity ($\mu$m$^{2}$ s$^{-1}$)", fontsize=fontsize)
+        plt.tight_layout()
+        plt.savefig(out_plot, dpi=600)
+        plt.close()
+        if sys.platform == "darwin":
+            os.system("open {}".format(out_plot))
+
+    return L_by_file 
+
+

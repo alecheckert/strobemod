@@ -182,23 +182,55 @@ def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0,
 
 def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupations,
     frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0, dz=0.7,
-    use_entire_track=True, max_jumps_per_track=np.inf, likelihood_mode="binned"):
+    use_entire_track=True, max_jumps_per_track=np.inf, likelihood_mode="binned",
+    map_columns=[], norm=True):
     """
     Given a set of trajectories and a particular mixture model of 
     diffusivities, evaluate the probability of each trajectory given 
     each separate diffusivity.
 
+    args
+    ----
+        tracks          :   pandas.DataFrame, trajectories
+        diffusivities   :   1D ndarray, either the diffusivities at which
+                            to evaluate the likelihoods
+                            (if likelihood_mode == 'point')
+                            or the edges of the diffusivity bins over 
+                            which to integrate the likelihoods 
+                            (if likelihood_mode == 'binned') in um^2 s^-1
+        occupations     :   1D ndarray, the estimated posterior mean 
+                            occupation of each component in *diffusivities*
+        frame_interval  :   float, the time between frames in seconds
+        loc_error       :   float, 1D localization error in um
+        pixel_size_um   :   float, size of pixels in um
+        dz              :   float, focal depth in um
+        use_entire_track:   bool, use all displacements in each trajectory
+                            to evaluate the likelihood of each diffusivity
+        max_jumps_per_track     :   int. If *use_entire_track* is False,
+                                    the maximum number of jumps to consider
+                                    from each trajectory
+        likelihood_mode :   str, either "binned", "point", or "binned_reg"
+        map_columns     :   str, a list of columns in the original trajectory
+                            dataframe (*tracks*) to map to the corresponding
+                            rows of the output
+        norm            :   bool, normalize the likelihoods over the diffusivities
+                            for each trajectory
+
     returns
     -------
-        pandas.DataFrame. Each row corresponds to one trajectory (whose
-            index in the original *tracks* dataframe is given by the 
-            "trajectory" column), and each column (apart from "trajectory")
-            corresponds to one of the diffusivities. Then the element
+        (
+            pandas.DataFrame. Each row corresponds to one trajectory (whose
+                index in the original *tracks* dataframe is given by the 
+                "trajectory" column), and each column (apart from "trajectory")
+                corresponds to one of the diffusivities. Then the element
 
-            result.loc[track_idx, diffusivity]
+                result.loc[track_idx, diffusivity]
 
-            corresponds to the likelihood of *diffusivity* given the 
-            observed trajectory with index *track_idx*.
+                corresponds to the likelihood of *diffusivity* given the 
+                observed trajectory with index *track_idx*;
+            list of str, the names of the diffusivity columns in the 
+                output dataframe
+        )
 
     """
     diffusivities = np.asarray(diffusivities)
@@ -226,12 +258,24 @@ def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupation
         use_entire_track=use_entire_track, max_jumps_per_track=max_jumps_per_track,
         pixel_size_um=pixel_size_um, likelihood_mode=likelihood_mode)
 
+    # Multiply by the state occupations
+    L = L * occupations 
+
+    # Normalize, if desired
+    if norm:
+        L = (L.T / L.sum(axis=1)).T 
+
     # Format the result as a dataframe
     columns = ["%.5f" % d for d in diffusivities_mid]
     L = pd.DataFrame(L, columns=columns)
     L["trajectory"] = track_indices 
+    L["track_length"] = track_lengths
 
-    return L 
+    # Map columns from the original trajectory dataframe to the output
+    for c in map_columns:
+        L[c] = L["trajectory"].map(tracks.groupby("trajectory")[c].first())
+
+    return L, columns 
 
 def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
     frame_interval=0.01, loc_error=0.0, use_entire_track=True, max_jumps_per_track=10,
