@@ -238,6 +238,143 @@ def strobe_nucleus(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=T
     else:
         return tracks_to_dataframe_gapped(tracks, n_gaps=n_gaps)
 
+def strobe_ellipsoid(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=True,
+    n_gaps=0, ellipse_dim=[10.0, 5.0, 5.0], bleach_prob_per_frame=0):
+    """
+    Simulate trajectories confined to stay inside of an ellipsoid.
+
+    Unlike the simulation above, we do not use specular reflections for
+    trajectories at the boundary, and instead resample jumps until one falls
+    inside the bounds of the nucleus.
+
+    args
+    ----
+        model_obj       :   a FractionalBrownianMotion3D or LevyFlight3D object,
+                            the simulator; or alternatively a 3D ndarray of shape
+                            (n_tracks, track_len, 3), the 3D positions of each 
+                            trajectory
+        n_tracks        :   int, the number of trajectories to simulate
+        dz              :   float, the thickness of the observation plane in um
+        loc_error       :   float, standard deviation of normally distributed 1D
+                            localization error in um
+        exclude_outside :   bool, exclude localizations that lie outside of the detectable
+                            z interval (-dz/2, dz/2). If False, the whole trajectories
+                            are returned.
+        n_gaps          :   int, the number of gap frames to tolerate in trajectories before
+                            dropping them. Only applies if *exclude_outside* is True.
+        ellipse_dim     :   float, axial radii of the 3D ellipse in um. These are 
+                            specified in the following order: z, y, x.
+        bleach_prob_per_frame   :   float, probability to bleach on any given frame
+
+    returns
+    -------
+        pandas.DataFrame with columns ["trajectory", "frame", "z", "y", "x"]
+
+    """
+    # Half the observation slice width
+    hz = dz * 0.5
+
+    # Ellipsoid squared radii
+    ellipse_dim = np.asarray(ellipse_dim)
+    e2 = ellipse_dim ** 2
+    a = ellipse_dim[0]
+    b = ellipse_dim[1]
+    c = ellipse_dim[2]
+    a2 = a ** 2
+    b2 = b ** 2
+    c2 = c ** 2
+
+    # Simulate some 3D trajectories, which start at the origin
+    tracks = model_obj(n_tracks)
+
+
+    ## STARTING POSITIONS: choose random starting positions inside the
+    # ellipsoid using rejection sampling
+
+    start_pos = np.zeros((n_tracks, 3), dtype=np.float64)
+    start_pos[:,0] = np.random.uniform(-a, a, size=n_tracks)
+    start_pos[:,1] = np.random.uniform(-b, b, size=n_tracks)
+    start_pos[:,2] = np.random.uniform(-c, c, size=n_tracks)
+
+    distance = (start_pos**2 / e2).sum(axis=1)
+    outside = distance > 1.0
+    n_outside = outside.sum()
+    while n_outside > 0:
+        start_pos[outside,0] = np.random.uniform(-a, a, size=n_outside)
+        start_pos[outside,1] = np.random.uniform(-b, b, size=n_outside)
+        start_pos[outside,2] = np.random.uniform(-c, c, size=n_outside)
+        distance = (start_pos**2 / e2).sum(axis=1)
+        outside = distance > 1.0
+        n_outside = outside.sum()
+
+    # Offset each trajectory by the starting position
+    for dim in range(3):
+        tracks[:,:,dim] = (tracks[:,:,dim].T + start_pos[:,dim]).T 
+
+
+    ## DEAL WITH BOUNDARY CROSSINGS
+    track_len = tracks.shape[1]
+    for t in range(1, tracks.shape[1]):
+
+        # Determine which trajectories lie outside the ellipsoid
+        # at this frame
+        distance_from_origin = (tracks[:,t,:]**2 / e2).sum(axis=1)
+        outside = distance_from_origin > 1.0
+        n_outside = outside.sum()
+
+        # Resimulate the remainder of the trajectories until none
+        # of them lie outside the ellipsoid
+        while n_outside > 0:
+            tracks[outside, t:, :] = model_obj(n_outside)[:,1:track_len-t+1,:]
+            for d in range(3):
+                tracks[outside, t:, d] = (tracks[outside, t:, d].T + tracks[outside, t-1, d]).T
+            distance_from_origin = (tracks[:,t,:]**2 / e2).sum(axis=1)
+            outside = distance_from_origin > 1.0
+            n_outside = outside.sum()
+        print("Finished with %d timepoints..." % t)
+
+    ## DEFOCALIZATION: exclude molecules outside of the slice from observation
+    # by setting their values to NaN. Some of these molecules may subsequently
+    # reenter and not be lost, if the number of gaps tolerated during tracking
+    # is greater than 0
+    if exclude_outside:
+        for t in range(tracks.shape[1]):
+
+            # Get the set of localizations that lie outside the focal plane
+            # at this frame interval
+            outside = np.abs(tracks[:,t,0]) > hz 
+
+            # Set the coordinates of these localizations to NaN
+            for d in range(3):
+                tracks[:,t,d][outside] = np.nan 
+
+
+    ## BLEACHING: stochastically and permanently bleach molecules. The bleaching
+    # rate is assumed to be the same throughout the nucleus and is stationary
+    # in time.
+    if bleach_prob_per_frame > 0:
+
+        bleached = np.zeros(tracks.shape[0], dtype=np.bool)
+
+        for t in range(tracks.shape[1]):
+            b = np.random.random(size=tracks.shape[0]) <= bleach_prob_per_frame
+            bleached = np.logical_or(bleached, b)
+            for d in range(3):
+                tracks[:,t,d][bleached] = np.nan 
+
+
+    ## LOCALIZATION ERROR: add normally-distributed localization error to 
+    # each localization
+    if loc_error != 0.0:
+        tracks = tracks + np.random.normal(scale=loc_error, size=tracks.shape)
+
+
+    # Format as a pandas.DataFrame
+    if len(tracks) == 0:
+        return pd.DataFrame([])
+    else:
+        return tracks_to_dataframe_gapped(tracks, n_gaps=n_gaps)
+
 def strobe_multistate_nucleus(model, n_tracks,  model_diffusivities,
     model_occupations, track_len=10, dz=0.7, frame_interval=0.01, loc_error=0.0,
     exclude_outside=True, n_gaps=0, nucleus_radius=5.0, bleach_prob_per_frame=0,

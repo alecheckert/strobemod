@@ -609,6 +609,97 @@ def rad_disp_histogram_3d(tracks, n_frames=4, bin_size=0.001,
 
     return H, bin_edges 
 
+###########################
+## ANGULAR DISTRIBUTIONS ##
+###########################
+
+def bond_angles(tracks, min_disp=0.2):
+    """
+    Return the angles between subsequent displacements for a 
+    set of trajectories. Angles between pi and 2 * pi are 
+    reflected onto the interval 0, pi.
+
+    args
+    ----
+        tracks      :   pandas.DataFrame
+        min_disp    :   float, discard displacements less than
+                        this displacement. This prevents us from
+                        being biased by localization error.
+
+    returns
+    -------
+        1D ndarray of shape (n_angles,), the observed
+            angles in radians (from 0 to pi)
+
+    """
+    tracks = track_length(tracks)
+    T = np.asarray(
+        tracks[(tracks["trajectory"] >= 0) & (tracks["track_length"] > 2)][
+            ["trajectory", "frame", "y", "x"]
+        ]
+    )
+    if T.shape[0] == 0:
+        return np.nan
+
+    traj_indices = np.unique(T[:, 0])
+    n_angles = T.shape[0] - 2 * len(traj_indices)
+    angles = np.zeros(n_angles, dtype="float64")
+
+    c = 0
+    for i, j in enumerate(traj_indices):
+        traj = T[T[:, 0] == j, 2:]
+        disps = traj[1:, :] - traj[:-1, :]
+        mags = np.sqrt((disps ** 2).sum(axis=1))
+        traj_angles = (disps[1:, :] * disps[:-1, :]).sum(axis=1) / (mags[1:] * mags[:-1])
+
+        # Only take angles above a given displacement, if desired
+        traj_angles = traj_angles[(mags[1:] >= min_disp) & (mags[:-1] >= min_disp)]
+
+        # Aggregate
+        n_traj_angles = traj_angles.shape[0]
+        angles[c : c + n_traj_angles] = traj_angles
+        c += n_traj_angles
+
+    # We'll lose some angles because of the min_disp cutoff
+    angles = angles[:c]
+
+    # Some floatint point errors occur here - values slightly
+    # greater than 1.0 or less than -1.0
+    angles[angles > 1.0] = 1.0 
+    angles[angles < -1.0] = -1.0 
+
+    return np.arccos(angles[~pd.isnull(angles)])
+
+def ang_dist(tracks, min_disp=0.2, n_bins=50):
+    """
+    Calculate the angular distribution of some trajectories. The 
+    support of the histogram is produced by dividing the angular
+    range 0 to pi into some number of bins.
+
+    args
+    ----
+        tracks      :   pandas.DataFrame
+        min_disp    :   float, minimum displacement to consider in um
+        n_bins      :   int, the number of bins in the histogram
+
+    returns
+    -------
+        (
+            1D ndarray of shape (n_bins,), the histogram;
+            1D ndarray of shape (n_bins+1,), the edges of the 
+                bins in radians
+        )
+
+    """
+    # Calculate angles
+    angles = bond_angles(tracks, min_disp=min_disp)
+
+    # Make the histogram
+    bin_edges = np.linspace(0, np.pi, n_bins+1)
+    H = np.histogram(angles, bins=bin_edges)[0]
+    
+    return H, bin_edges 
+
 ###############################
 ## DIFFUSION MODEL UTILITIES ##
 ###############################
@@ -888,7 +979,7 @@ def defoc_prob_levy_gapped(D, alpha, n_frames, frame_interval, dz, n_gaps=0):
         spillover[:] = 0
     return result 
 
-def defoc_prob_fbm(D, hurst, n_frames, frame_interval, dz):
+def defoc_prob_fbm(D, hurst, n_frames, frame_interval, dz, D_type=4):
     """
     Return a vector representing the defocalization probability of a
     fractional Brownian motion with a given Hurst parameter and 
@@ -904,6 +995,8 @@ def defoc_prob_fbm(D, hurst, n_frames, frame_interval, dz):
         n_frames    :   int, the number of frame intervals
         frame_interval  :   float, the frame interval in seconds
         dz          :   float, the depth of the focal plane in um
+        D_type      :   int, the convention for the diffusion coefficient.
+                        Unless you know what you're doing, don't touch this.
 
     returns
     -------
@@ -919,7 +1012,14 @@ def defoc_prob_fbm(D, hurst, n_frames, frame_interval, dz):
             "8 frame intervals supported for FBM fitting")
 
     # Get the dispersion parameter
-    c = np.log(D * frame_interval / (2 * hurst))
+    if D_type == 1:
+        c = np.log(D * np.power(frame_interval, 2*hurst))
+    elif D_type == 2:
+        c = 2 * hurst * np.log(D * frame_interval)
+    elif D_type == 3:
+        c = np.log(D * frame_interval / (2 * hurst))
+    elif D_type == 4:
+        c = np.log(D * frame_interval)
 
     # If the dispersion lies outside the interpolated range
     # if c < -23.0:
