@@ -137,6 +137,8 @@ class MultivariateNormalRandomVector(object):
         """
         norm = np.power(2.0 * np.pi, self.N / 2.0) * np.power(self.det_covariance, 0.5)
         x_shift = x - self.mean
+        print('x_shift:')
+        print(x_shift)
 
         if len(x.shape) == 1:
             return np.exp(-0.5 * x_shift @ self.inv_covariance @ x_shift) / norm
@@ -287,7 +289,7 @@ class FractionalBrownianMotion(MultivariateNormalRandomVector):
         self.hurst = hurst
         self.D = D
         self.dt = dt
-        assert D_type in [1, 2, 3]
+        assert D_type in [1, 2, 3, 4]
         self.D_type = D_type
 
         # Build the FBM covariance matrix
@@ -313,6 +315,14 @@ class FractionalBrownianMotion(MultivariateNormalRandomVector):
                 + np.power(S, 2 * hurst)
                 - np.power(np.abs(T - S), 2 * hurst)
             )
+        elif D_type == 4:
+            self.D_mod = D / np.power(dt, 2 * hurst - 1)
+            T, S = (np.indices((track_len, track_len)) + 1) * dt
+            self.C = self.D_mod * (
+                np.power(T, 2 * hurst)
+                + np.power(S, 2 * hurst)
+                - np.power(np.abs(T - S), 2 * hurst)
+            )           
 
         # Set zero mean
         self.mean = np.zeros(track_len, dtype="float64")

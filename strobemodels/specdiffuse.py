@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 specdiffuse.py -- decompose a jump length distribution into a spectrum of 
-underlying diffusivities using expectation maximization
+underlying diffusion coefficients using expectation maximization
 
 """
 import os
@@ -24,6 +24,7 @@ import pandas as pd
 import dask 
 
 from time import time
+import tifffile 
 
 # Defocalization probability of a Brownian motion 
 # in a thin plane
@@ -38,11 +39,11 @@ from .utils import (
     track_length
 )
 
-# Default support on which to evaluate diffusivity occupations
-DEFAULT_DIFFUSIVITIES = np.logspace(-2.0, 2.0, 301)
+# Default support on which to evaluate diffusion coefficient occupations
+DEFAULT_DIFF_COEFS = np.logspace(-2.0, 2.0, 301)
 
 
-def expect_max(data, likelihood, diffusivities, n_iter=1000, **kwargs):
+def expect_max(data, likelihood, diff_coefs, n_iter=1000, **kwargs):
     """
     Use expectation-maximization algorithm to estimate the state occupations
     for a mixture model, given a set of observed jumps.
@@ -54,25 +55,25 @@ def expect_max(data, likelihood, diffusivities, n_iter=1000, **kwargs):
         likelihood  :   function with signature (data, D, **kwargs), the 
                         likelihood function for jumps produced by the diffusion
                         model
-        diffusivities:   1D ndarray, the set of diffusivities to consider
+        diff_coefs  :   1D ndarray, the set of diffusion coefficients to consider
         n_iter      :   int, the number of iterations
         kwargs      :   additional keyword arguments to the likelihood
 
     returns
     -------
-        1D ndarray of shape diffusivities.shape, the estimated occupations for 
+        1D ndarray of shape diff_coefs.shape, the estimated occupations for 
             each diffusive state
 
     """
     M = data.shape[0]
-    nD = len(diffusivities)
+    nD = len(diff_coefs)
 
     # Current guess for the state occupations
     p = np.ones(nD, dtype=np.float64) / nD 
 
     # The likelihood of each observation given each diffusion coefficient
     L = np.zeros((M, nD), dtype=np.float64)
-    for i, D in enumerate(diffusivities):
+    for i, D in enumerate(diff_coefs):
         L[:,i] = likelihood(data, D, **kwargs)
 
     # The probabilities of each diffusive state, given each observation
@@ -180,32 +181,32 @@ def rad_disp_squared(tracks, start_frame=None, n_frames=4, pixel_size_um=1.0,
 
     return vecs, n_tracks 
 
-def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupations,
+def evaluate_diff_coef_likelihoods_on_tracks(tracks, diff_coefs, occupations,
     frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0, dz=0.7,
     use_entire_track=True, max_jumps_per_track=np.inf, likelihood_mode="binned",
     map_columns=[], norm=True):
     """
     Given a set of trajectories and a particular mixture model of 
-    diffusivities, evaluate the probability of each trajectory given 
-    each separate diffusivity.
+    diffusion coefficients, evaluate the probability of each trajectory given 
+    each separate diffusion coefficient.
 
     args
     ----
         tracks          :   pandas.DataFrame, trajectories
-        diffusivities   :   1D ndarray, either the diffusivities at which
+        diff_coefs      :   1D ndarray, either the diffusion coefficients s at which
                             to evaluate the likelihoods
                             (if likelihood_mode == 'point')
-                            or the edges of the diffusivity bins over 
+                            or the edges of the diffusion coefficient bins over 
                             which to integrate the likelihoods 
                             (if likelihood_mode == 'binned') in um^2 s^-1
         occupations     :   1D ndarray, the estimated posterior mean 
-                            occupation of each component in *diffusivities*
+                            occupation of each component in *diff_coefs*
         frame_interval  :   float, the time between frames in seconds
         loc_error       :   float, 1D localization error in um
         pixel_size_um   :   float, size of pixels in um
         dz              :   float, focal depth in um
         use_entire_track:   bool, use all displacements in each trajectory
-                            to evaluate the likelihood of each diffusivity
+                            to evaluate the likelihood of each diffusion coefficient
         max_jumps_per_track     :   int. If *use_entire_track* is False,
                                     the maximum number of jumps to consider
                                     from each trajectory
@@ -213,7 +214,7 @@ def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupation
         map_columns     :   str, a list of columns in the original trajectory
                             dataframe (*tracks*) to map to the corresponding
                             rows of the output
-        norm            :   bool, normalize the likelihoods over the diffusivities
+        norm            :   bool, normalize the likelihoods over the diffusion coefficients
                             for each trajectory
 
     returns
@@ -222,38 +223,38 @@ def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupation
             pandas.DataFrame. Each row corresponds to one trajectory (whose
                 index in the original *tracks* dataframe is given by the 
                 "trajectory" column), and each column (apart from "trajectory")
-                corresponds to one of the diffusivities. Then the element
+                corresponds to one of the diffusion coefficients. Then the element
 
-                result.loc[track_idx, diffusivity]
+                result.loc[track_idx, diff_coef]
 
-                corresponds to the likelihood of *diffusivity* given the 
+                corresponds to the likelihood of *diff_coef* given the 
                 observed trajectory with index *track_idx*;
-            list of str, the names of the diffusivity columns in the 
+            list of str, the names of the diffusion columns in the 
                 output dataframe
         )
 
     """
-    diffusivities = np.asarray(diffusivities)
+    diff_coefs = np.asarray(diff_coefs)
     if likelihood_mode in ["binned", "binned_reg"]:
-        K = diffusivities.shape[0]-1
-        diffusivities_mid = np.sqrt(diffusivities[1:] * diffusivities[:-1])
+        K = diff_coefs.shape[0]-1
+        diff_coefs_mid = np.sqrt(diff_coefs[1:] * diff_coefs[:-1])
 
     elif likelihood_mode == "point":
-        K = diffusivities.shape[0]
-        diffusivities_mid = diffusivities
+        K = diff_coefs.shape[0]
+        diff_coefs_mid = diff_coefs
 
     # Calculate defocalization probabilities for each state after one 
     # frame interval
     f_remain_one_interval = np.empty(K, dtype=np.float64)
-    for j, D in enumerate(diffusivities_mid):
+    for j, D in enumerate(diff_coefs_mid):
         f_remain_one_interval[j] = defoc_prob_brownian(D, 1, 
             frame_interval=frame_interval, dz=dz, n_gaps=0)[0]
 
-    # Evaluate the likelihood of each diffusivity, given each trajectory. The
+    # Evaluate the likelihood of each diffusion coefficient, given each trajectory. The
     # result, *L[i,j]*, gives the likelihood to observe trajectory i under 
     # diffusive state j
-    L, track_indices, track_lengths = evaluate_diffusivity_likelihood(
-        tracks, diffusivities, state_biases=f_remain_one_interval,
+    L, track_indices, track_lengths = evaluate_diff_coef_likelihood(
+        tracks, diff_coefs, state_biases=f_remain_one_interval,
         frame_interval=frame_interval, loc_error=loc_error, 
         use_entire_track=use_entire_track, max_jumps_per_track=max_jumps_per_track,
         pixel_size_um=pixel_size_um, likelihood_mode=likelihood_mode)
@@ -266,7 +267,7 @@ def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupation
         L = (L.T / L.sum(axis=1)).T 
 
     # Format the result as a dataframe
-    columns = ["%.5f" % d for d in diffusivities_mid]
+    columns = ["%.5f" % d for d in diff_coefs_mid]
     L = pd.DataFrame(L, columns=columns)
     L["trajectory"] = track_indices 
     L["track_length"] = track_lengths
@@ -277,36 +278,36 @@ def evaluate_diffusivity_likelihoods_on_tracks(tracks, diffusivities, occupation
 
     return L, columns 
 
-def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
+def evaluate_diff_coef_likelihood(tracks, diff_coefs, state_biases=None,
     frame_interval=0.01, loc_error=0.0, use_entire_track=True, max_jumps_per_track=10,
     min_jumps_per_track=1, pixel_size_um=1.0, start_frame=None, likelihood_mode="binned"):
     """
-    Create a matrix that gives the likelihood of each of a set of diffusivities,
+    Create a matrix that gives the likelihood of each of a set of diffusion coefficients,
     given each of a set of trajectories.
 
     *likelihood_mode* specifies the type of likelihood to compute:
 
-        "point":    evaluate the likelihood at the specific point diffusivities
-                    in the array *diffusivities*. The resulting likelihood matrix
-                    has shape (n_tracks, len(diffusivities))
+        "point":    evaluate the likelihood at the specific point diffusion coefficients
+                    in the array *diff_coefs*. The resulting likelihood matrix
+                    has shape (n_tracks, len(diff_coefs))
 
         "binned":   evaluate the likelihood integrated between each consecutive
-                    pair of points in the array *diffusivities*. The resulting
-                    likelihood matrix has shape (n_tracks, len(diffusivities)-1)
+                    pair of points in the array *diff_coefs*. The resulting
+                    likelihood matrix has shape (n_tracks, len(diff_coefs)-1)
 
         "binned_reg":   an experimental mode similar to binned, but which 
                     attempts to regularize the likelihood (particularly for 
                     doublets). The resulting likelihood matrix has shape 
-                    (n_tracks, len(diffusivities)-1)
+                    (n_tracks, len(diff_coefs)-1)
 
     args
     ----
         tracks          :   pandas.DataFrame, trajectories
-        diffusivities   :   1D ndarray of shape (M,), the set of diffusivities
-                                or edges of diffusivity bins, depending on the
+        diff_coefs      :   1D ndarray of shape (M,), the set of diffusion coefficients
+                                or edges of diffusion coefficient bins, depending on the
                                 value of *likelihood_mode*
         state_biases    :   1D ndarray of shape (M,), inherent experimental 
-                                biases for or against each of the diffusivities
+                                biases for or against each of the diffusion coefficients
         frame_interval  :   float, time between frames in seconds
         loc_error       :   float, 1D localization error in um
         use_entire_track:   bool, use every displacement from every trajectory
@@ -329,8 +330,8 @@ def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
         )
 
     """
-    diffusivities = np.asarray(diffusivities)
-    K = diffusivities.shape[0]
+    diff_coefs = np.asarray(diff_coefs)
+    K = diff_coefs.shape[0]
     le2 = loc_error ** 2
     if max_jumps_per_track is None:
         max_jumps_per_track = np.inf 
@@ -357,11 +358,11 @@ def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
     L_cond["sum_squared_disp"] = np.asarray(df.groupby("trajectory")["squared_disp"].sum())
     del df 
 
-    # Evaluate the diffusivity likelihoods at each of the points specified by
-    # the diffusivity array
+    # Evaluate the diffusion coefficient likelihoods at each of the points specified by
+    # the diffusion coefficient array
     if likelihood_mode == "point":
 
-        # Likelihood of each of the point diffusivities in *diffusivities*
+        # Likelihood of each of the point diffusion coefficients in *diff_coefs*
         L = np.zeros((n_tracks, K), dtype=np.float64)
 
         # Number of displacements per trajectory
@@ -371,25 +372,25 @@ def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
         log_gamma_n_disps = np.log(gamma(n_disps))
         log_ss = (n_disps - 1) * np.log(L_cond["sum_squared_disp"])
 
-        # Evaluate the log likelihood of each diffusivity, given each trajectory
-        for j, D in enumerate(diffusivities):
+        # Evaluate the log likelihood of each diffusion coefficient, given each trajectory
+        for j, D in enumerate(diff_coefs):
             L[:,j] = np.asarray(log_ss - L_cond["sum_squared_disp"] / (4*(D*frame_interval+le2)) - \
                     n_disps * np.log(4*(D*frame_interval+le2)) - log_gamma_n_disps)
 
         # Regularize the problem by subtracting the largest log likelihood 
-        # across all diffusivities (for each trajectory), which ensures that 
-        # at least one diffusivity has a nonzero likelihood after exponentiation
+        # across all diffusion coefficients (for each trajectory), which ensures that 
+        # at least one diffusion coefficients has a nonzero likelihood after exponentiation
         L = (L.T - L.max(axis=1)).T 
 
         # Convert from log likelihoods to likelihoods and normalize
         L = np.exp(L)
         L = (L.T / L.sum(axis=1)).T 
 
-    # Integrate the diffusivity likelihoods over each bin
+    # Integrate the diffusion coefficient likelihoods over each bin
     elif likelihood_mode == "binned":
 
-        # Likelihood of each of the diffusivity bins defined by the bin edges
-        # in *diffusivities*
+        # Likelihood of each of the diffusion coefficient bins defined by the bin edges
+        # in *diff_coefs*
         L = np.zeros((n_tracks, K-1), dtype=np.float64)
 
         # Divide the trajectories into doublets and everything else, then take the 
@@ -403,18 +404,18 @@ def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
         for j in range(K-1):
 
             # Deal with doublets
-            L[doublets,j] = expi(-ss_doublets/(4*(diffusivities[j]*frame_interval+le2))) - \
-                expi(-ss_doublets/(4*(diffusivities[j+1]*frame_interval+le2)))
+            L[doublets,j] = expi(-ss_doublets/(4*(diff_coefs[j]*frame_interval+le2))) - \
+                expi(-ss_doublets/(4*(diff_coefs[j+1]*frame_interval+le2)))
 
             # Deal with everything else
-            L[~doublets, j] = gammainc(tl_nondoublets-1, ss_nondoublets/(4*(diffusivities[j]*frame_interval+le2))) - \
-                gammainc(tl_nondoublets-1, ss_nondoublets/(4*(diffusivities[j+1]*frame_interval+le2)))
+            L[~doublets, j] = gammainc(tl_nondoublets-1, ss_nondoublets/(4*(diff_coefs[j]*frame_interval+le2))) - \
+                gammainc(tl_nondoublets-1, ss_nondoublets/(4*(diff_coefs[j+1]*frame_interval+le2)))
 
-    # Integrate the diffusivity likelihoods over bin, using a regularizing term
+    # Integrate the diffusion coefficient likelihoods over bin, using a regularizing term
     elif likelihood_mode == "binned_reg":
 
-        # Likelihood of each of the diffusivity bins defined by the bin edges
-        # in *diffusivities*
+        # Likelihood of each of the diffusion coefficient bins defined by the bin edges
+        # in *diff_coefs*
         L = np.zeros((n_tracks, K-1), dtype=np.float64)
 
         # Number of displacements in each trajectory
@@ -424,8 +425,8 @@ def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
         ss = np.asarray(L_cond["sum_squared_disp"])
 
         for j in range(K-1):
-            L[:,j] = gammainc(tl, ss/(4*(diffusivities[j]*frame_interval+le2))) - \
-                gammainc(tl, ss/(4*(diffusivities[j+1]*frame_interval+le2)))
+            L[:,j] = gammainc(tl, ss/(4*(diff_coefs[j]*frame_interval+le2))) - \
+                gammainc(tl, ss/(4*(diff_coefs[j+1]*frame_interval+le2)))
 
     # Incorporate state biases inherent to the measurement, if any
     if not state_biases is None:
@@ -434,7 +435,7 @@ def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
     # Floating point errors
     L[L<0] = 0
 
-    # Normalize over diffusivities for each trajectory
+    # Normalize over diffusion coefficients for each trajectory
     L = (L.T / L.sum(axis=1)).T 
 
     # Format track lengths
@@ -445,10 +446,10 @@ def evaluate_diffusivity_likelihood(tracks, diffusivities, state_biases=None,
 
     return L, track_indices, track_lengths
 
-def emdiff(tracks, diffusivities, n_iter=10000, frame_interval=0.01,
+def emdiff(tracks, diff_coefs, n_iter=10000, frame_interval=0.01,
     use_entire_track=True, max_jumps_per_track=np.inf, 
     dz=0.7, loc_error=0.0, pixel_size_um=1.0, verbose=True,
-    track_diffusivities_out_csv=None, mode="by_displacement", 
+    track_diff_coefs_out_csv=None, mode="by_displacement", 
     pseudoprob=0.001, likelihood_mode="point", start_frame=0):
     """
     Estimate the fraction of trajectories in each of a spectrum of diffusive states,
@@ -457,13 +458,13 @@ def emdiff(tracks, diffusivities, n_iter=10000, frame_interval=0.01,
 
     The result is a vector with the predicted occupations of each state.
 
-    note on choice of diffusivities
-    -------------------------------
+    note on choice of diffusion coefficients
+    ----------------------------------------
         This algorithm estimates the occupation of each diffusive state rather than
-        the corresponding diffusivity, so the vector of diffusivities (*diffusivities*) 
-        should be chosen with values that encompasses the range of diffusivities that
+        the corresponding diffusion coefficient, so the vector *diff_coefs*
+        should be chosen with values that encompasses the range of diffusion coefs that
         are reasonably expected for this experiment. For instance, a biological 
-        molecule might merit diffusivites ranging from 0.0 to 10.0 um^2 s^-1, with 
+        molecule might merit diffusion coefficients ranging from 0.0 to 10.0 um^2 s^-1, with 
         0.1 or 0.2 um^2 s^-1 increments.
 
     note on convergence
@@ -480,7 +481,7 @@ def emdiff(tracks, diffusivities, n_iter=10000, frame_interval=0.01,
     ----
         tracks          :   pandas.DataFrame, the trajectories. Must contain "y", "x",
                             "frame" (int), and "trajectory" columns
-        diffusivities   :   1D ndarray, the set of diffusivities to consider in um^2 
+        diff_coefs      :   1D ndarray, the set of diffusion coefficients to consider in um^2 
                             s^-1
         n_iter          :   int, the number of iterations
         n_frames        :   int, the maximum number of frame intervals to consider
@@ -491,10 +492,10 @@ def emdiff(tracks, diffusivities, n_iter=10000, frame_interval=0.01,
                             columns of the input dataframe are assumed to be in 
                             units of pixels
         verbose         :   bool
-        track_diffusivities_out_csv :   str, file to save the individual trajectory
-                            diffusivities to. The result is indexed by trajectory
+        track_diff_coefs_out_csv :   str, file to save the individual trajectory
+                            diffusion coefficients to. The result is indexed by trajectory
                             and each column corresponds to the likelihood of one
-                            of the diffusivities given that trajectory, under the
+                            of the diffusion coefficients given that trajectory, under the
                             posterior model.
         mode            :   str, either "by_displacement" or "by_trajectory", indicates
                             the basic statistical unit underpinning the EM routine.
@@ -503,34 +504,34 @@ def emdiff(tracks, diffusivities, n_iter=10000, frame_interval=0.01,
 
     returns
     -------
-        1D ndarray of shape diffusivities.shape, the estimated occupations of each 
+        1D ndarray of shape diff_coefs.shape, the estimated occupations of each 
             diffusive state
 
     """
-    diffusivities = np.asarray(diffusivities)
+    diff_coefs = np.asarray(diff_coefs)
 
-    # Treat the diffusivities array as bin edges, with the center of 
+    # Treat the diffusion coefficient array as bin edges, with the center of 
     # each bin defined as the logistic mean of the edges
     if likelihood_mode in ["binned", "binned_reg"]:
-        K = diffusivities.shape[0] - 1
-        diffusivities_mid = np.sqrt(diffusivities[1:] * diffusivities[:-1])
+        K = diff_coefs.shape[0] - 1
+        diff_coefs_mid = np.sqrt(diff_coefs[1:] * diff_coefs[:-1])
 
-    # Treat the diffusivities array as points, with likelihoods 
-    # representative of the entire neighborhood of diffusivities
+    # Treat the diffusion coefficient array as points, with likelihoods 
+    # representative of the entire neighborhood of diffusion coefficient
     elif likelihood_mode == "point":
-        K = diffusivities.shape[0]
-        diffusivities_mid = diffusivities 
+        K = diff_coefs.shape[0]
+        diff_coefs_mid = diff_coefs
 
     # Calculate defocalization probabilities for each state after one 
     # frame interval
     f_remain_one_interval = np.empty(K, dtype=np.float64)
-    for j, D in enumerate(diffusivities_mid):
+    for j, D in enumerate(diff_coefs_mid):
         f_remain_one_interval[j] = defoc_prob_brownian(D, 1, 
             frame_interval=frame_interval, dz=dz, n_gaps=0)[0]
 
-    # Evaluate the likelihood of each diffusivity, given each trajectory
-    L, track_indices, track_lengths = evaluate_diffusivity_likelihood(
-        tracks, diffusivities, state_biases=f_remain_one_interval,
+    # Evaluate the likelihood of each diffusion coefficient, given each trajectory
+    L, track_indices, track_lengths = evaluate_diff_coef_likelihood(
+        tracks, diff_coefs, state_biases=f_remain_one_interval,
         frame_interval=frame_interval, loc_error=loc_error,
         use_entire_track=use_entire_track, max_jumps_per_track=max_jumps_per_track,
         pixel_size_um=pixel_size_um, start_frame=start_frame,
@@ -568,7 +569,7 @@ def emdiff(tracks, diffusivities, n_iter=10000, frame_interval=0.01,
         # displacements as the "observation unit" here. If using displacements,
         # note that the likelihood of each displacement is assumed to be equal
         # to the likelihood of its whole corresponding trajectory under a 
-        # given diffusivity.
+        # given diffusion coefficient
         if mode == "by_displacement":
             T = (T.T * track_n_disps).T 
             p[:] = T.sum(axis=0) / n_disps_tot 
@@ -583,17 +584,17 @@ def emdiff(tracks, diffusivities, n_iter=10000, frame_interval=0.01,
         p = p / f_remain_one_interval
     p /= p.sum()
 
-    # Save the diffusivity probability vectors for each trajectory
-    if not track_diffusivities_out_csv is None:
-        columns = ["%.5f" % d for d in diffusivities]
+    # Save the diffusion probability vectors for each trajectory
+    if not track_diff_coefs_out_csv is None:
+        columns = ["%.5f" % d for d in diff_coefs]
         out = pd.DataFrame(T, columns=columns)
         out["trajectory"] = track_indices 
-        out.to_csv(track_diffusivities_out_csv, index=False)
+        out.to_csv(track_diff_coefs_out_csv, index=False)
 
     if verbose: print("")
-    return p, diffusivities_mid 
+    return p, diff_coefs_mid 
 
-def gsdiff_subsample(tracks, diffusivities, n_partitions=6, subsample_size=0.3,
+def gsdiff_subsample(tracks, diff_coefs, n_partitions=6, subsample_size=0.3,
     subsample_type="fraction", n_threads=6, **kwargs):
     """
     Given a set of trajectories, subsample the trajectories and run gsdiff
@@ -603,7 +604,7 @@ def gsdiff_subsample(tracks, diffusivities, n_partitions=6, subsample_size=0.3,
     args
     ----
         tracks              :   pd.DataFrame
-        diffusivities       :   1D ndarray
+        diff_coefs          :   1D ndarray
         n_partitions        :   int, the number of subsamples
         subsample_size      :   float or int, the size of each subsample.
                                 If *subsample_type* is "fraction", then this
@@ -618,7 +619,7 @@ def gsdiff_subsample(tracks, diffusivities, n_partitions=6, subsample_size=0.3,
     -------
         (
             1D ndarray of shape K, the average of each subsample
-            1D ndarray of shape K, the diffusivity bin midpoints
+            1D ndarray of shape K, the diffusion coefficient bin midpoints
         )
 
     """
@@ -647,36 +648,36 @@ def gsdiff_subsample(tracks, diffusivities, n_partitions=6, subsample_size=0.3,
     @dask.delayed
     def driver(i):
         subtracks = tracks.loc[tracks["trajectory"].isin(subsamples[i])]
-        return gsdiff(subtracks, diffusivities, n_threads=1, **kwargs)
+        return gsdiff(subtracks, diff_coefs, n_threads=1, **kwargs)
 
     # Results array
     jobs = [driver(i) for i in range(n_partitions)]
     results = dask.compute(*jobs, scheduler="processes", num_workers=n_threads)
     posterior_means = np.asarray([i[0] for i in results])
-    diffusivities_mid = results[0][1]
+    diff_coefs_mid = results[0][1]
     print(posterior_means.shape)
     posterior_means = posterior_means.mean(axis=0)
     posterior_means /= posterior_means.sum()
-    return posterior_means, diffusivities_mid 
+    return posterior_means, diff_coefs_mid 
 
-def gsdiff(tracks, diffusivities=None, prior=None, n_iter=1000, burnin=20,
+def gsdiff(tracks, diff_coefs=None, prior=None, n_iter=1000, burnin=20,
     n_threads=1, frame_interval=0.01, loc_error=0.0, pixel_size_um=0.16,
     dz=np.inf, pseudocounts=2, max_weight=1, damp=1.0, use_entire_track=True,
     max_jumps_per_track=np.inf, min_jumps_per_track=1, verbose=True, 
     mode="by_displacement", likelihood_mode="binned", start_frame=0,
-    diagnostic=False, track_diffusivities_out_csv=None):
+    diagnostic=False, track_diff_coefs_out_csv=None):
     """
-    Estimate a distribution of diffusivities from a set of trajectories 
+    Estimate a distribution of diffusion coefficients from a set of trajectories 
     using Gibbs sampling.
 
     args
     ----
         tracks          :   pandas.DataFrame, trajectories. Must contain
                             the "frame", "trajectory", "y", and "x" columns
-        diffusivities   :   1D ndarray of shape K+1, the edges of the diffusivity bins
-                            in um^2 s^-1
+        diff_coefs      :   1D ndarray of shape K+1, the edges of the diffusion 
+                            coefficient bins in um^2 s^-1
         prior           :   1D ndarray of shape (K), the prior distribution
-                            over the diffusivity bins 
+                            over the diffusion coefficient bins 
         n_iter          :   int, number of iterations to run
         burnin          :   int, the minimum number of iterations to run 
                             before starting to record the results
@@ -693,8 +694,8 @@ def gsdiff(tracks, diffusivities=None, prior=None, n_iter=1000, burnin=20,
         pseudocounts    :   int, the relative weight of the prior. 1 is a noninformative
                             prior.
         n_threads       :   int, the number of parallel threads to run
-        track_diffusivities_out_csv     :   str, path to a CSV at which to
-                            save the likelihood of each diffusivity bin for
+        track_diff_coefs_out_csv     :   str, path to a CSV at which to
+                            save the likelihood of each diffusion coefficient bin for
                             each trajectory in the dataset. Potentially large.
         mode            :   str, either "by_displacement" or "by_trajectory", 
                             the meaning of the counts in the posterior distribution.
@@ -703,51 +704,51 @@ def gsdiff(tracks, diffusivities=None, prior=None, n_iter=1000, burnin=20,
                             displacement/trajectory. Lower is more conservative.
         diagnostic      :   bool, make some diagnostic reports for debugging
         likelihood_mode :   str, either "binned", "point", or "binned_reg", the
-                            type of likelihood function for the diffusivity
+                            type of likelihood function for the diffusion coefficient
                             bins. "binned" is a good default.
         start_frame     :   int, disregard displacements before this frame
         max_weight      :   int, the maximum weight to give trajectories 
                             when building the intermediate sampling distributions
-                            over the diffusivity bins. While the "correct" approach
+                            over the diffusion coefficient bins. While the "correct" approach
                             is to give each trajectory a weight proportional to the
                             observed number of displacements in that trajectory,
                             in practice this can be a little too confident and a 
                             few trajectories can end up dominating the data. On the
                             other hand, max_weight = 1 is very conservative, only 
-                            calling diffusivity peaks when they are extremely well
+                            calling diffusion coefficient peaks when they are extremely well
                             supported by many trajectories.
 
     returns
     -------
         (
             2D ndarray of shape (n_threads, K), the posterior means over
-                the diffusivity bins for each thread;
+                the diffusion coefficient bins for each thread;
             1D ndarray of shape (K), the geometric means of each 
-                diffusivity bin
+                diffusion coefficient bin
         )
 
     """
-    if diffusivities is None:
-        diffusivities = DEFAULT_DIFFUSIVITIES
-    diffusivities = np.asarray(diffusivities)
+    if diff_coefs is None:
+        diff_coefs = DEFAULT_DIFF_COEFS
+    diff_coefs = np.asarray(diff_coefs)
 
-    # Treat the diffusivities array as bin edges, with the center of 
+    # Treat the diffusion coefficients array as bin edges, with the center of 
     # each bin defined as the logistic mean of the edges
     if likelihood_mode in ["binned", "binned_reg"]:
-        K = diffusivities.shape[0] - 1
-        diffusivities_mid = np.sqrt(diffusivities[1:] * diffusivities[:-1])
+        K = diff_coefs.shape[0] - 1
+        diff_coefs_mid = np.sqrt(diff_coefs[1:] * diff_coefs[:-1])
 
-    # Treat the diffusivities array as points, with likelihoods 
-    # representative of the entire neighborhood of diffusivities
+    # Treat the diffusion coefficient array as points, with likelihoods 
+    # representative of the entire neighborhood of diffusion coefficients
     elif likelihood_mode == "point":
-        K = diffusivities.shape[0]
-        diffusivities_mid = diffusivities 
+        K = diff_coefs.shape[0]
+        diff_coefs_mid = diff_coefs 
 
     # Calculate defocalization probabilities for each state after the
     # minimum observation time (defined as the minimum number of frame
     # intervals required to include a trajectory)
     f_remain_one_interval = np.empty(K, dtype=np.float64)
-    for j, D in enumerate(diffusivities_mid):
+    for j, D in enumerate(diff_coefs_mid):
         f_remain_one_interval[j] = defoc_prob_brownian(D, 1, 
             frame_interval=frame_interval, dz=dz, n_gaps=0)[-1]
 
@@ -758,8 +759,8 @@ def gsdiff(tracks, diffusivities=None, prior=None, n_iter=1000, burnin=20,
         prior = f_remain_one_interval * pseudocounts / f_remain_one_interval.max()
 
     # Evaluate the likelihood of each trajectory given each diffusive state
-    L, track_indices, track_lengths = evaluate_diffusivity_likelihood(
-        tracks, diffusivities, state_biases=f_remain_one_interval,
+    L, track_indices, track_lengths = evaluate_diff_coef_likelihood(
+        tracks, diff_coefs, state_biases=f_remain_one_interval,
         frame_interval=frame_interval, loc_error=loc_error,
         use_entire_track=use_entire_track, max_jumps_per_track=max_jumps_per_track,
         pixel_size_um=pixel_size_um, start_frame=start_frame,
@@ -774,14 +775,14 @@ def gsdiff(tracks, diffusivities=None, prior=None, n_iter=1000, burnin=20,
 
     if diagnostic:
 
-        # Show the distribution of diffusivities across all trajectories
+        # Show the distribution of diffusion coefficients across all trajectories
         fig, ax = plt.subplots(2, 1, figsize=(6, 6))
-        ax[0].plot(diffusivities_mid, L.mean(axis=0), color="k")
-        ax[1].plot(diffusivities_mid, (L.T * track_lengths).sum(axis=1), color="k")
+        ax[0].plot(diff_coefs_mid, L.mean(axis=0), color="k")
+        ax[1].plot(diff_coefs_mid, (L.T * track_lengths).sum(axis=1), color="k")
         for j in range(2):
             ax[j].set_xscale("log")
             ax[j].set_ylabel("likelihood")
-            ax[j].set_xlabel("Diffusivity ($\mu$m$^{2}$ s$^{-1}$)")
+            ax[j].set_xlabel("Diffusion coefficient ($\mu$m$^{2}$ s$^{-1}$)")
         ax[0].set_title("Summed across trajectories")
         ax[1].set_title("Summed across trajectories and weighted by # disps")
         plt.tight_layout(); plt.show(); plt.close()
@@ -789,10 +790,10 @@ def gsdiff(tracks, diffusivities=None, prior=None, n_iter=1000, burnin=20,
         # Show some sample trajectory likelihoods
         for i in range(20):
             print("Trajectory %d:" % i)
-            plt.plot(diffusivities_mid, L[i,:], color="k")
+            plt.plot(diff_coefs_mid, L[i,:], color="k")
             plt.title("Sample trajectory %d" % i)
             plt.xscale("log")
-            plt.xlabel("Diffusivity")
+            plt.xlabel("Diffusion coefficient")
             plt.ylabel("Likelihood")
             plt.show(); plt.close()
 
@@ -837,7 +838,7 @@ def gsdiff(tracks, diffusivities=None, prior=None, n_iter=1000, burnin=20,
             # trajectory and the current parameter values
             T = L * p
 
-            # Normalize over diffusivities
+            # Normalize over diffusion coefficients
             T = (T.T / T.sum(axis=1)).T 
 
             # Draw a state occupation vector from the current set of probabilities
@@ -872,42 +873,41 @@ def gsdiff(tracks, diffusivities=None, prior=None, n_iter=1000, burnin=20,
 
             # Determine the posterior distribution over the state occupations
             posterior = prior + n_red * damp 
-            # posterior = prior + np.minimum(n*damp, max_weight) # EXPERIMENTAL
 
             # Draw a new state occupation vector
             p = np.random.dirichlet(posterior)
 
             if diagnostic and verbose and iter_idx % 200 == 0:
                 fig, ax = plt.subplots(6, 1, figsize=(8, 10))
-                ax[0].plot(diffusivities_mid, L.sum(axis=0), color="k")
+                ax[0].plot(diff_coefs_mid, L.sum(axis=0), color="k")
                 ax[0].set_xscale("log")
-                ax[0].set_xlabel("diffusivity")
+                ax[0].set_xlabel("diffusion coefficient")
                 ax[0].set_ylabel("naive likelihood")
 
-                ax[1].plot(diffusivities_mid, T.sum(axis=0), color="k")
+                ax[1].plot(diff_coefs_mid, T.sum(axis=0), color="k")
                 ax[1].set_xscale("log")
                 ax[1].set_ylabel("summed likelihood")
-                ax[1].set_xlabel("Diffusivity")
+                ax[1].set_xlabel("Diffusion coefficient")
 
-                ax[2].plot(diffusivities_mid, n, color="r")
+                ax[2].plot(diff_coefs_mid, n, color="r")
                 ax[2].set_title("n")
-                ax[2].set_xlabel("Diffusivity")
+                ax[2].set_xlabel("Diffusion coefficient")
                 ax[2].set_ylabel("count")
                 ax[2].set_xscale("log")
 
-                ax[3].plot(diffusivities_mid, p, color="b")
+                ax[3].plot(diff_coefs_mid, p, color="b")
                 ax[3].set_xscale("log")
-                ax[3].set_xlabel("Diffusivity")
+                ax[3].set_xlabel("Diffusion coefficient")
                 ax[3].set_ylabel("p")
 
-                ax[4].plot(diffusivities_mid, mean_p, color="k")
+                ax[4].plot(diff_coefs_mid, mean_p, color="k")
                 ax[4].set_xscale("log")
-                ax[4].set_xlabel("Diffusivity")
+                ax[4].set_xlabel("Diffusion coefficient")
                 ax[4].set_ylabel("mean_p")
 
-                ax[5].plot(diffusivities_mid, mean_n, color="k")
+                ax[5].plot(diff_coefs_mid, mean_n, color="k")
                 ax[5].set_xscale("log")
-                ax[5].set_xlabel("Diffusivity")
+                ax[5].set_xlabel("Diffusion coefficient")
                 ax[5].set_ylabel("mean_n")
 
                 plt.tight_layout()
@@ -933,45 +933,45 @@ def gsdiff(tracks, diffusivities=None, prior=None, n_iter=1000, burnin=20,
     samples = dask.compute(*jobs, scheduler=scheduler, num_workers=n_threads)
     samples = np.concatenate(samples, axis=0)
 
-    # Normalize over diffusivities for each sample
+    # Normalize over diffusion coefficients for each sample
     samples = (samples.T / samples.sum(axis=1)).T 
 
-    # If desired, evaluate the likelihoods of each diffusivity for each trajectory
+    # If desired, evaluate the likelihoods of each diffusion coefficients for each trajectory
     # under the model specified by the posterior mean. Then save these to a csv
-    if not track_diffusivities_out_csv is None:
+    if not track_diff_coefs_out_csv is None:
 
         # Accumulate the posterior means across threads
         posterior_means = samples.mean(axis=0)
 
         # Calculate the probability of each diffusive state, given each trajectory
-        # and the posterior model distribution of diffusivities
+        # and the posterior model distribution of diffusion coefficients
         T = L * posterior_means 
         T = (T.T / T.sum(axis=1)).T 
 
         # Format as a pandas.DataFrame
-        columns = ["%.5f" % d for d in diffusivities]
+        columns = ["%.5f" % d for d in diff_coefs]
         out_df = pd.DataFrame(T, columns=columns)
         out_df["trajectory"] = track_indices
 
         # Save 
-        out_df.to_csv(track_diffusivities_out_csv, index=False)
+        out_df.to_csv(track_diff_coefs_out_csv, index=False)
 
-    return samples, diffusivities_mid
+    return samples, diff_coefs_mid
 
-def gsdiff_median(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
+def gsdiff_median(tracks, diff_coefs, prior=None, n_iter=1000, burnin=500,
     use_entire_track=True, max_jumps_per_track=np.inf, min_jumps_per_track=1,
     frame_interval=0.01, loc_error=0.0, pixel_size_um=1.0, dz=np.inf,
-    verbose=True, pseudocounts=1, n_threads=1, track_diffusivities_out_csv=None,
+    verbose=True, pseudocounts=1, n_threads=1, track_diff_coefs_out_csv=None,
     mode="by_displacement", defoc_corr="first_only", damp=0.1, diagnostic=True,
     likelihood_mode="binned", start_frame=0):
     """
-    Estimate a distribution of diffusivities from a set of trajectories 
+    Estimate a distribution of diffusion coefficients from a set of trajectories 
     using Gibbs sampling.
 
     This time, use the posterior geometric median rather than the posterior mean.
 
     """
-    diffusivities = np.asarray(diffusivities)
+    diff_coefs = np.asarray(diff_coefs)
 
     # Weiszfeld's algorithm for computing the L2 geometric median
     def weiszfeld(X, convergence=1.0e-8, max_iter=100, reg=1.0e-6):
@@ -995,23 +995,23 @@ def gsdiff_median(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
                 prev = curr 
         return curr 
 
-    # Treat the diffusivities array as bin edges, with the center of 
+    # Treat the diffusion coefficient array as bin edges, with the center of 
     # each bin defined as the logistic mean of the edges
     if likelihood_mode in ["binned", "binned_reg"]:
-        K = diffusivities.shape[0] - 1
-        diffusivities_mid = np.sqrt(diffusivities[1:] * diffusivities[:-1])
+        K = diff_coefs.shape[0] - 1
+        diff_coefs_mid = np.sqrt(diff_coefs[1:] * diff_coefs[:-1])
 
-    # Treat the diffusivities array as points, with likelihoods 
-    # representative of the entire neighborhood of diffusivities
+    # Treat the diffusion coefficient array as points, with likelihoods 
+    # representative of the entire neighborhood of diffusion coefficients
     elif likelihood_mode == "point":
-        K = diffusivities.shape[0]
-        diffusivities_mid = diffusivities 
+        K = diff_coefs.shape[0]
+        diff_coefs_mid = diff_coefs
 
     # Calculate defocalization probabilities for each state after the
     # minimum observation time (defined as the minimum number of frame
     # intervals required to include a trajectory)
     f_remain_one_interval = np.empty(K, dtype=np.float64)
-    for j, D in enumerate(diffusivities_mid):
+    for j, D in enumerate(diff_coefs_mid):
         f_remain_one_interval[j] = defoc_prob_brownian(D, 1, 
             frame_interval=frame_interval, dz=dz, n_gaps=0)[-1]
 
@@ -1022,8 +1022,8 @@ def gsdiff_median(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         prior = f_remain_one_interval * pseudocounts / f_remain_one_interval.max()
 
     # Evaluate the likelihood of each trajectory given each diffusive state
-    L, track_indices, track_lengths = evaluate_diffusivity_likelihood(
-        tracks, diffusivities, state_biases=f_remain_one_interval,
+    L, track_indices, track_lengths = evaluate_diff_coef_likelihood(
+        tracks, diff_coefs, state_biases=f_remain_one_interval,
         frame_interval=frame_interval, loc_error=loc_error,
         use_entire_track=use_entire_track, max_jumps_per_track=max_jumps_per_track,
         pixel_size_um=pixel_size_um, start_frame=start_frame,
@@ -1038,14 +1038,14 @@ def gsdiff_median(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
 
     if diagnostic:
 
-        # Show the distribution of diffusivities across all trajectories
+        # Show the distribution of diffusion coefficients across all trajectories
         fig, ax = plt.subplots(2, 1, figsize=(6, 6))
-        ax[0].plot(diffusivities_mid, L.mean(axis=0), color="k")
-        ax[1].plot(diffusivities_mid, (L.T * track_lengths).sum(axis=1), color="k")
+        ax[0].plot(diff_coefs_mid, L.mean(axis=0), color="k")
+        ax[1].plot(diff_coefs_mid, (L.T * track_lengths).sum(axis=1), color="k")
         for j in range(2):
             ax[j].set_xscale("log")
             ax[j].set_ylabel("likelihood")
-            ax[j].set_xlabel("Diffusivity ($\mu$m$^{2}$ s$^{-1}$")
+            ax[j].set_xlabel("Diffusion coefficient ($\mu$m$^{2}$ s$^{-1}$")
         ax[0].set_title("Summed across trajectories")
         ax[1].set_title("Summed across trajectories and weighted by # disps")
         plt.tight_layout(); plt.show(); plt.close()
@@ -1053,10 +1053,10 @@ def gsdiff_median(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
         # Show some sample trajectory likelihoods
         for i in range(20):
             print("Trajectory %d:" % i)
-            plt.plot(diffusivities_mid, L[i,:], color="k")
+            plt.plot(diff_coefs_mid, L[i,:], color="k")
             plt.title("Sample trajectory %d" % i)
             plt.xscale("log")
-            plt.xlabel("Diffusivity")
+            plt.xlabel("Diffusion coefficient")
             plt.ylabel("Likelihood")
             plt.show(); plt.close()
 
@@ -1101,7 +1101,7 @@ def gsdiff_median(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
             # trajectory and the current parameter values
             T = L * p 
 
-            # Normalize over diffusivities
+            # Normalize over diffusion coefficients
             T = (T.T / T.sum(axis=1)).T 
 
             # Draw a state occupation vector from the current set of probabilities
@@ -1140,35 +1140,35 @@ def gsdiff_median(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
 
             if diagnostic and verbose and iter_idx % 200 == 0:
                 fig, ax = plt.subplots(6, 1, figsize=(8, 10))
-                ax[0].plot(diffusivities_mid, L.sum(axis=0), color="k")
+                ax[0].plot(diff_coefs_mid, L.sum(axis=0), color="k")
                 ax[0].set_xscale("log")
-                ax[0].set_xlabel("diffusivity")
+                ax[0].set_xlabel("diffusion coefficient")
                 ax[0].set_ylabel("naive likelihood")
 
-                ax[1].plot(diffusivities_mid, T.sum(axis=0), color="k")
+                ax[1].plot(diff_coefs_mid, T.sum(axis=0), color="k")
                 ax[1].set_xscale("log")
                 ax[1].set_ylabel("summed likelihood")
-                ax[1].set_xlabel("Diffusivity")
+                ax[1].set_xlabel("Diffusion coefficient")
 
-                ax[2].plot(diffusivities_mid, n, color="r")
+                ax[2].plot(diff_coefs_mid, n, color="r")
                 ax[2].set_title("n")
-                ax[2].set_xlabel("Diffusivity")
+                ax[2].set_xlabel("Diffusion coefficient")
                 ax[2].set_ylabel("count")
                 ax[2].set_xscale("log")
 
-                ax[3].plot(diffusivities_mid, p, color="b")
+                ax[3].plot(diff_coefs_mid, p, color="b")
                 ax[3].set_xscale("log")
-                ax[3].set_xlabel("Diffusivity")
+                ax[3].set_xlabel("Diffusion coefficient")
                 ax[3].set_ylabel("p")
 
-                ax[4].plot(diffusivities_mid, mean_p, color="k")
+                ax[4].plot(diff_coefs_mid, mean_p, color="k")
                 ax[4].set_xscale("log")
-                ax[4].set_xlabel("Diffusivity")
+                ax[4].set_xlabel("Diffusion coefficient")
                 ax[4].set_ylabel("mean_p")
 
-                ax[5].plot(diffusivities_mid, mean_n, color="k")
+                ax[5].plot(diff_coefs_mid, mean_n, color="k")
                 ax[5].set_xscale("log")
-                ax[5].set_xlabel("Diffusivity")
+                ax[5].set_xlabel("Diffusion coefficient")
                 ax[5].set_ylabel("mean_n")
 
                 plt.tight_layout()
@@ -1201,23 +1201,23 @@ def gsdiff_median(tracks, diffusivities, prior=None, n_iter=1000, burnin=500,
     sample_sets = np.concatenate(sample_sets, axis=0).astype(np.float64)
 
     sample_sets = sample_sets / f_remain_one_interval
-    return sample_sets, diffusivities_mid 
+    return sample_sets, diff_coefs_mid 
 
-def associate_diffusivity(tracks, track_diffusivities, diffusivity):
+def associate_diff_coef(tracks, track_diff_coefs, diff_coef):
     """
-    Map diffusivity likelihoods back to their respective trajectories.
+    Map diffusion coefficient likelihoods back to their respective trajectories.
 
     The purpose of this function is to take the output of 
-    evaluate_diffusivity_likelihoods_on_tracks and map one of the 
-    components of the diffusivity likelihood vector back onto the 
+    evaluate_diff_coef_likelihoods_on_tracks and map one of the 
+    components of the diffusion coefficient likelihood vector back onto the 
     original trajectories.
 
     args
     ----
         tracks      :   pandas.DataFrame, a set of trajectories
-        track_diffusivities     :   pandas.DataFrame, the probability
-                       of each diffusivity for each trajectory
-        diffusivity     :   float or str, the specific diffusivity
+        track_diff_coefs     :   pandas.DataFrame, the probability
+                       of each diffusion coefficient for each trajectory
+        diff_coef     :   float or str, the specific diffusion coefficient
                         to associate into the track CSV
 
     returns
@@ -1225,11 +1225,11 @@ def associate_diffusivity(tracks, track_diffusivities, diffusivity):
         pandas.DataFrame, the tracks CSV with the new column
 
     """
-    if isinstance(diffusivity, float):
-        diffusivity = str(diffusivity)
+    if isinstance(diff_coef, float):
+        diff_coef = str(diff_coef)
 
-    col = "diffusivity_{}".format(diffusivity)
-    tracks[col] = tracks["trajectory"].map(track_diffusivities[diffusivity])
+    col = "diff_coef_{}".format(diff_coef)
+    tracks[col] = tracks["trajectory"].map(track_diff_coefs[diff_coef])
 
     return tracks 
 

@@ -45,7 +45,7 @@ import dask
 from strobemodels.utils import defoc_prob_brownian, track_length
 from strobemodels.specdiffuse import rad_disp_squared
 from .specdiffuse import (
-    evaluate_diffusivity_likelihoods_on_tracks
+    evaluate_diff_coef_likelihoods_on_tracks
 )
 
 # Default diffusivity binning scheme
@@ -418,7 +418,8 @@ def assert_gs_dp_diff_exists(incorp_defoc_likelihoods=False):
 def evaluate_model_on_nuclei(csv_files, diffusivity_bin_edges,
     model_posterior_mean=None, frame_interval=0.00748, loc_error=0.0,
     pixel_size_um=0.16, dz=None, use_entire_track=True,
-    max_jumps_per_track=np.inf, start_frame=0, out_plot=None):
+    max_jumps_per_track=np.inf, start_frame=0, out_plot=None,
+    vmax=None):
     """
     Evaluate a diffusivity model on several files from a dataset,
     optionally producing a plot that shows the likelihood of each 
@@ -464,7 +465,7 @@ def evaluate_model_on_nuclei(csv_files, diffusivity_bin_edges,
         tracks = track_length(tracks)
         tracks = tracks[tracks["track_length"] > 1]
         tracks["source_file"] = csv_file 
-        L, diff_cols = evaluate_diffusivity_likelihoods_on_tracks(
+        L, diff_cols = evaluate_diff_coef_likelihoods_on_tracks(
             tracks, diffusivity_bin_edges, model_posterior_mean, 
             frame_interval=frame_interval, loc_error=loc_error,
             pixel_size_um=pixel_size_um, dz=dz, use_entire_track=use_entire_track,
@@ -486,7 +487,9 @@ def evaluate_model_on_nuclei(csv_files, diffusivity_bin_edges,
         y_ext = 0.2 * n 
         x_ext = 5.0
         fontsize = 8
-        s = ax.imshow(L_by_file, vmin=0, extent=(0, x_ext, 0, y_ext))
+        if vmax is None:
+            vmax = L_by_file.max()
+        s = ax.imshow(L_by_file, vmin=0, vmax=vmax, extent=(0, x_ext, 0, y_ext))
         cbar = plt.colorbar(s, ax=ax, shrink=0.8)
         cbar.ax.tick_params(labelsize=fontsize)
         ax.set_yticks([])

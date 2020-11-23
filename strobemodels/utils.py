@@ -233,6 +233,245 @@ def concat_tracks_files(*csv_paths, out_csv=None, start_frame=0,
 
     return tracks 
 
+#################################
+## COVARIANCE MATRIX UTILITIES ##
+#################################
+
+def covariance_matrix(tracks, n=7, covtype="position", immobile_thresh=0.1,
+    loc_error=0.035, frame_interval=0.00748, pixel_size_um=0.16):
+    """
+    Calculate the empirical covariance matrix for a set of trajectories.
+    This is an *n* by *n* matrix such that element (i, j) is the covariance
+    of the particle's 1D position at time points i and j:
+
+        C[i,j] := E[ X[i] X[j] ]
+
+    where X is path of the particle, centered such that X[0] = 0.
+
+    args
+    ----
+        tracks          :   pandas.DataFrame or 3D ndarray
+        n               :   int, rank of the covariance matrix to calculate.
+                            All trajectories with fewer than *n* displacements
+                            are excluded.
+        covtype         :   str (either "position" or "jump"), the 
+                            type of covariance matrix to compute. If "position",
+                            the covariance of the position relative to the first 
+                            displacement is used. If "jump", the covariance
+                            of the subsequent displacements is used. 
+        immobile_thresh :   float, exclude trajectories with an estimated
+                            diffusion coefficient below this threshold, to
+                            mitigate the effects of localization error.
+                            This threshold is specified in um^2 s^-1.
+        loc_error       :   float, 1D localization error in um. Only used
+                            if immobile_thresh is not None.
+        frame_interval  :   float, frame interval in seconds. Only used if
+                            immobile_thresh is not None.
+        pixel_size_um   :   float, the size of pixels in um
+
+    returns
+    -------
+        2D ndarray of shape (n, n), the empirical covariance matrix
+
+    """
+    # Convert from ndarray to pandas.DataFrame if necessary
+    if isinstance(tracks, np.ndarray):
+        assert len(tracks.shape) == 3
+        n_tracks, n, n_dim = tracks.shape 
+        M = n_tracks * n 
+        df = pd.DataFrame(index=np.arange(M),
+            columns=["trajectory", "frame", "y", "x"])
+        df["trajectory"] = np.arange(M) // n 
+        df["frame"] = np.arange(M) % n 
+        df["y"] = tracks[:,:,0].ravel()
+        df["x"] = tracks[:,:,1].ravel()
+        tracks = df 
+    else:
+
+        # Consider one more point than we would otherwise, if 
+        # we're calculating an (n-by-n) covariance matrix on the
+        # displacements
+        if covtype in ["jump", "jump_cross_dimension"]:
+            n += 1
+
+    # Only consider trajectories of requisite length
+    tracks = track_length(tracks)
+    tracks = tracks[tracks["track_length"] >= (n+1)].copy()
+    tracks[['y', 'x']] = tracks[['y', 'x']] * pixel_size_um 
+
+    # Sort first by trajectory, then by frame
+    tracks = tracks.sort_values(by=["trajectory", "frame"])
+
+    # Subtract the first point of each trajectory
+    if "first_y" in tracks.columns:
+        tracks = tracks.drop('first_y', axis=1)
+    if "first_x" in tracks.columns:
+        tracks = tracks.drop('first_x', axis=1)
+
+    tracks = tracks.join(
+        tracks.groupby("trajectory")["y"].first().rename("first_y"),
+        on="trajectory"
+    )
+    tracks = tracks.join(
+        tracks.groupby("trajectory")["x"].first().rename("first_x"),
+        on="trajectory"
+    )
+    tracks["y"] -= tracks["first_y"]
+    tracks["x"] -= tracks["first_x"]
+    tracks = tracks.drop("first_y", axis=1)
+    tracks = tracks.drop("first_x", axis=1)
+
+    # Only take the position from the first displacement onward
+    tracks = assign_index_in_track(tracks)
+    tracks = tracks[tracks["index_in_track"] > 0]
+
+    # Exclude "immobile" trajectories
+    if not immobile_thresh is None:
+
+        # Maximum likelihood estimation of diffusion coefficient
+        n_disps = np.asarray(tracks.groupby("trajectory").size())
+        tracks['y2'] = tracks['y']**2
+        tracks['x2'] = tracks['x']**2
+        ssy = np.asarray(tracks.groupby("trajectory")["y2"].sum())
+        ssx = np.asarray(tracks.groupby("trajectory")["x2"].sum())
+        ss = ssy + ssx 
+        D_ml = (ss / (4 * n_disps) - (loc_error**2)) / frame_interval 
+        track_indices = np.asarray(tracks.groupby("trajectory").apply(lambda i: i.name))
+        include_indices = track_indices[D_ml > immobile_thresh]
+        tracks = tracks[tracks["trajectory"].isin(include_indices)]
+        n_tracks = tracks["trajectory"].nunique()
+
+    # Take the first *n* points of each trajectory
+    tracks = tracks[tracks["index_in_track"] <= n]
+
+    # Format the result as an ndarray
+    tracks = np.asarray(tracks[['y', 'x']]).reshape((n_tracks, n, 2))
+
+    if covtype == "position":
+
+        # Calculate the covariance matrix on the positions of 
+        # the trajectory at each time point
+        C = ((tracks[:,:,0].T @ tracks[:,:,0]) + \
+            (tracks[:,:,1].T @ tracks[:,:,1])) / \
+            (2 * n_tracks - 1)
+
+    elif covtype == "jump":
+
+        # Calculate the vectorial displacements
+        tracks = tracks[:,1:,:] - tracks[:,:-1,:]
+        n_disps = tracks.shape[0] * tracks.shape[1]
+
+        # Calculate the covariance matrix on the displacements
+        # of the trajectory at each time point
+        C = ((tracks[:,:,0].T @ tracks[:,:,0]) + \
+            (tracks[:,:,1].T @ tracks[:,:,1])) / \
+            (2 * n_disps - 1)       
+
+    elif covtype == "jump_cross_dimension":
+
+        # Claculate the vectorial displacement
+        tracks = tracks[:,1:,:] - tracks[:,:-1,:]
+        n_disps = tracks.shape[0] * tracks.shape[1]
+
+        # Calculate the covariance matrix between the X and Y 
+        # displacements at each time point
+        C = (tracks[:,:,0].T @ tracks[:,:,1]) / (n_disps - 1)
+
+    return C 
+
+def fbme_jump_covariance(n, hurst=0.5, D=1.0, dt=0.01,
+    D_type=4, loc_error=0.0):
+
+    h2 = hurst * 2
+
+    T, S = np.indices((n, n)) + 1
+
+    if D_type == 1:
+        C = D * np.power(dt, 2*hurst) * ( \
+                np.power(np.abs(T-S+1), h2) + \
+                np.power(np.abs(T-S-1), h2) - \
+                2*np.power(np.abs(T-S), h2)
+            )
+    elif D_type == 2:
+        raise NotImplementedError
+    elif D_type == 3:
+        D_mod = D * dt / (2 * hurst)
+        C = D_mod * (np.power(np.abs(T-S+1), h2) + \
+            np.power(np.abs(T-S-1), h2) - \
+            2*np.power(np.abs(T-S), h2))       
+    elif D_type == 4:
+        D_mod = D * dt 
+        C = D_mod * (np.power(np.abs(T-S+1), h2) + \
+            np.power(np.abs(T-S-1), h2) - \
+            2*np.power(np.abs(T-S), h2))
+
+    if loc_error > 0.0:
+        le2 = loc_error ** 2
+        C = C + np.diag(np.ones(n) * le2)
+        C += le2 
+
+    return C 
+
+###############################
+## SEPARABILITY IN X/Y TESTS ##
+###############################
+
+def jump_magnitude_dependence(tracks, n_frames=1, max_jump=1.0, bin_size=0.01,
+    normalize=False, frame_interval=0.01, pixel_size_um=0.16,
+    use_entire_track=True, max_jumps_per_track=10, n_gaps=0):
+    """
+    Determine how the magnitude of the jumps in the *x* dimension
+    depends on their magnitude in the *y* dimension. 
+
+    args
+    ----
+        tracks          :   pandas.DataFrame
+        n_frames        :   int, number of frame intervals over
+                            which to compute the jump
+        max_jump        :   float, maximum jump to consider in um
+        bin_size        :   float, jump length bin size in um
+        normalize       :   bool
+        frame_interval  :   float, seconds
+        pixel_size_um   :   float, um 
+        use_entire_track:   bool
+        max_jumps_per_track:    int
+        n_gaps              :   int
+
+    returns
+    -------
+        (
+            2D ndarray of shape (n_bins, n_bins), the histogram;
+            1D ndarray of shape (n_bins+1,), the bin edges in um 
+        )
+
+    """
+    n_bins = int(max_jump / bin_size)
+    max_jump = n_bins * bin_size 
+
+    # Jump bin edges in um
+    jump_bin_edges =  np.linspace(0, max_jump, n_bins+1)
+
+    # Compute the jumps
+    xy_jumps = np.abs(xy_disp_2d(tracks, n_frames=n_frames, frame_interval=frame_interval,
+        pixel_size_um=pixel_size_um, use_entire_track=use_entire_track,
+        max_jumps_per_track=max_jumps_per_track, n_gaps=n_gaps))
+
+    # Matrix of displacement densities
+    M = np.zeros((n_bins, n_bins), dtype=np.float64)
+
+    for i in range(n_bins):
+
+        # Select only displacements in the desired range
+        x_jumps = xy_jumps[np.logical_and(
+            xy_jumps[:,1]>=jump_bin_edges[i],
+            xy_jumps[:,1]<jump_bin_edges[i+1]
+        ), 0]
+
+        # Make a histogram
+        M[i,:] = np.histogram(x_jumps, bins=jump_bin_edges)[0]
+
+    return M, jump_bin_edges 
+
 #############################################
 ## GENERATE RADIAL DISPLACEMENT HISTOGRAMS ##
 #############################################
@@ -312,6 +551,72 @@ def track_array(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16):
 
     """
     raise NotImplementedError
+
+def xy_disp_2d(tracks, n_frames=1, frame_interval=0.01, pixel_size_um=0.16,
+    use_entire_track=True, max_jumps_per_track=10, n_gaps=0):
+    """
+    Gather every vectorial (x, y) displacement in the dataset. If
+    *use_entire_track* is *True*, then every displacement from every
+    trajectory is used. Otherwise, we only use the first few jumps
+    from every trajectory, with the jump determined by *max_jumps_per_track*.
+
+    args
+    ----
+        tracks          :   pandas.DataFrame
+        n_frames        :   int, the number of frame intervals over 
+                            which to compute the jump 
+        frame_interval  :   float, seconds
+        pixel_size_um   :   float, um 
+        use_entire_track:   bool
+        max_jumps_per_track :   int
+
+    returns
+    -------
+        2D ndarray, shape (n_jumps, 2), where index [i, 0] 
+            corresponds to the x displacement of the i^th 
+            displacement and [i, 1] corresponds to the y 
+            displacement of the same jump
+
+    """
+    tracks = track_length(tracks)
+
+    # Exclude singlets
+    T = tracks[tracks["track_length"] > 1].copy()
+
+    if not use_entire_track:
+        T = assign_index_in_track(T)
+        T = T[T['index_in_track'] >= max_jumps_per_track]
+
+    # Sort first by trajectory then by frame
+    T = T.sort_values(by=["trajectory", "frame"])
+
+    # Format as ndarray
+    T = np.asarray(T[['trajectory', 'frame', 'x', 'y']])
+
+    # Convert to um
+    T[:,2:4] = T[:,2:4] * pixel_size_um 
+
+    # Collect the target jumps
+    all_jumps = []
+
+    for i in range(1, (n_gaps+1) * n_frames + 1):
+
+        # Determine the vectorial displacements
+        disps = T[i:,:] - T[:-i,:]
+
+        # Only include displacements originating from the same
+        # trajectory
+        disps = disps[disps[:,0] == 0, :]
+
+        # Only include displacements originating from the target
+        # frame interval
+        disps = disps[disps[:,1] == n_frames, :]
+
+        if disps.shape[0] > 0:
+            all_jumps.append(disps.copy())
+
+    # Concatenate
+    return np.concatenate(all_jumps, axis=0)[:,2:4]
 
 def rad_disp_2d(tracks, n_frames=4, frame_interval=0.01, pixel_size_um=0.16,
     use_entire_track=False, max_jumps_per_track=10):
@@ -725,7 +1030,8 @@ def generate_brownian_transfer_function(support, D, frame_interval):
     g /= g.sum()
     return np.fft.rfft(g)
 
-def defoc_prob_brownian(D, n_frames, frame_interval, dz, n_gaps=0):
+def defoc_prob_brownian(D, n_frames, frame_interval, dz, n_gaps=0,
+    start_outside=False):
     """
     Calculate the fraction of Brownian molecules remaining in the focal
     volume at a few timepoints.
@@ -761,17 +1067,26 @@ def defoc_prob_brownian(D, n_frames, frame_interval, dz, n_gaps=0):
     if n_gaps > 0:
         return defoc_prob_brownian_gapped(D, n_frames, frame_interval, dz, n_gaps=n_gaps)
 
-    # Define the initial probability mass 
+    # Real-space support
     s = (int(dz//2.0)+1) * 2
     support = np.linspace(-s, s, int(((2*s)//0.001)+2))[:-1]
     hz = 0.5 * dz 
     inside = np.abs(support) <= hz 
     outside = ~inside 
-    pmf = inside.astype("float64")
-    pmf /= pmf.sum()
 
     # Define the transfer function for this BM
     g_rft = generate_brownian_transfer_function(support, D, frame_interval)
+
+    # Define the initial probability mass
+    if start_outside:
+        pmf = outside.astype(np.float64)
+        pmf /= pmf.sum()
+        pmf = np.fft.fftshift(np.fft.irfft(np.fft.rfft(pmf) * g_rft, n=pmf.shape[0]))
+        pmf[outside] = 0.0
+        pmf /= pmf.sum()
+    else:
+        pmf = inside.astype("float64")
+        pmf /= pmf.sum()
 
     # Propagate over subsequent frame intervals
     result = np.zeros(n_frames, dtype=np.float64)

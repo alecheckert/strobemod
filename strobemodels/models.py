@@ -37,6 +37,7 @@ import numpy as np
 # Fairly low-precision 3D Hankel transform, for fast model refinement
 from hankel import SymmetricFourierTransform
 HankelTrans3DLowPrec = SymmetricFourierTransform(ndim=3, N=500, h=0.01)
+HankelTrans2DLowPrec = SymmetricFourierTransform(ndim=2, N=500, h=0.001)
 
 # Radial projection in the HiLo geometry
 from .radproj import radproj 
@@ -120,7 +121,8 @@ def pdf_1state_brownian(rt_tuples, D, loc_error, **kwargs):
     var2 = 2 * (D * rt_tuples[:,1] + (loc_error**2))
     return (rt_tuples[:,0] / var2) * np.exp(-(rt_tuples[:,0]**2) / (2*var2))
 
-def cdf_1state_fbm(rt_tuples, hurst, D, loc_error, frame_interval=0.01, **kwargs):
+def cdf_1state_fbm(rt_tuples, hurst, D, loc_error, frame_interval=0.01,
+    D_type=4, **kwargs):
     """
     Distribution function for the 2D radial displacements of a single-
     state fractional Brownian motion.
@@ -148,13 +150,17 @@ def cdf_1state_fbm(rt_tuples, hurst, D, loc_error, frame_interval=0.01, **kwargs
         1D ndarray of shape (n_points,), the CDF 
 
     """
-    D_mod = D / (hurst * np.power(frame_interval, 2 * hurst - 1))
+    if D_type == 3:
+        D_mod = D / (hurst * np.power(frame_interval, 2 * hurst - 1))
+    elif D_type == 4:
+        D_mod = 2 * D / (np.power(frame_interval, 2 * hurst - 1))
     return 1.0 - np.exp(-(rt_tuples[:,0]**2) / (
         2 * D_mod * np.power(rt_tuples[:,1], 2*hurst) \
         + 4 * (loc_error**2)
     ))
 
-def pdf_1state_fbm(rt_tuples, hurst, D, loc_error, frame_interval=0.01, **kwargs):
+def pdf_1state_fbm(rt_tuples, hurst, D, loc_error, frame_interval=0.01,
+    D_type=4, **kwargs):
     """
     Probability density function for the 2D radial displacements of a single-state
     fractional Brownian motion.
@@ -182,7 +188,10 @@ def pdf_1state_fbm(rt_tuples, hurst, D, loc_error, frame_interval=0.01, **kwargs
         1D ndarray of shape (n_points,), the PDF
 
     """
-    D_mod = D / (hurst * np.power(frame_interval, 2 * hurst - 1))
+    if D_type == 3:
+        D_mod = D / (hurst * np.power(frame_interval, 2 * hurst - 1))
+    elif D_type == 4:
+        D_mod = 2 * D / (np.power(frame_interval, 2 * hurst - 1))
     var2 = D_mod * np.power(rt_tuples[:,1], 2*hurst) + 2 * (loc_error**2)
     return (rt_tuples[:,0] / var2) * np.exp(-(rt_tuples[:,0]**2) / (2*var2))
 
@@ -263,6 +272,35 @@ def cdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, dz=None, **kwargs):
         result[match] = cdf 
 
     return result 
+
+def pdf_1state_levy_flight_alt(rt_tuples, alpha, D, loc_error, **kwargs):
+    le2 = loc_error ** 2
+    unique_times = np.unique(rt_tuples[:,1])
+    result = np.zeros(rt_tuples.shape[0])
+    for t in unique_times:
+        match = rt_tuples[:,1] == t
+        func = lambda k_: np.exp(-D * t * np.power(np.abs(k_), alpha) \
+            - le2 * (k_ ** 2))
+        result[match] = np.abs(HankelTrans2DLowPrec.transform(func,
+            rt_tuples[match,0], inverse=True, ret_err=False))
+        result[match] = result[match] * rt_tuples[match, 0]
+        result[match] = result[match] / result[match].sum()
+    return result 
+
+def cdf_1state_levy_flight_alt(rt_tuples, alpha, D, loc_error, **kwargs):
+    le2 = loc_error ** 2
+    unique_times = np.unique(rt_tuples[:,1])
+    result = np.zeros(rt_tuples.shape[0])
+    for t in unique_times:
+        match = rt_tuples[:,1] == t
+        func = lambda k_: np.exp(-D * t * np.power(np.abs(k_), alpha) \
+            - le2 * (k_ ** 2))
+        result[match] = np.abs(HankelTrans2DLowPrec.transform(func,
+            rt_tuples[match,0], inverse=True, ret_err=False))
+        result[match] = result[match] * rt_tuples[match, 0]
+        result[match] = np.cumsum(result[match] / result[match].sum())
+    return result 
+
 
 def pdf_1state_levy_flight(rt_tuples, alpha, D, loc_error, dz=None, **kwargs):
     """
@@ -1415,6 +1453,7 @@ CDF_MODELS = {
     "one_state_brownian": cdf_1state_brownian,
     "one_state_fbm": cdf_1state_fbm,
     "one_state_levy_flight": cdf_1state_levy_flight,
+    "one_state_levy_flight_alt": cdf_1state_levy_flight_alt,
     "one_state_levy_hankel": cdf_1state_levy_flight_hankel,
     "two_state_brownian": cdf_2state_brownian_uncorr,
     "two_state_brownian_zcorr": cdf_2state_brownian_zcorr,
@@ -1430,6 +1469,7 @@ PDF_MODELS = {
     "one_state_brownian": pdf_1state_brownian,
     "one_state_fbm": pdf_1state_fbm,
     "one_state_levy_flight": pdf_1state_levy_flight,
+    "one_state_levy_flight_alt": pdf_1state_levy_flight_alt,
     "one_state_levy_hankel": pdf_1state_levy_flight_hankel,
     "two_state_brownian": pdf_2state_brownian_uncorr,
     "two_state_brownian_zcorr": pdf_2state_brownian_zcorr,
@@ -1445,6 +1485,7 @@ MODEL_PARS = {
     "one_state_brownian": ["D", "loc_error"],
     "one_state_fbm": ["hurst", "D", "loc_error"],
     "one_state_levy_flight": ["alpha", "D", "loc_error"],
+    "one_state_levy_flight_alt": ["alpha", "D", "loc_error"],
     "one_state_levy_hankel": ["alpha", "scale", "loc_error"],
     "two_state_brownian": ["f0", "D0", "D1", "loc_error"],
     "two_state_brownian_zcorr": ["f0", "D0", "D1", "loc_error"],
@@ -1469,6 +1510,10 @@ MODEL_PAR_BOUNDS = {
         np.array([1.0, np.inf, 0.1])
     ),
     "one_state_levy_flight": (
+        np.array([1.0, 1.0e-8, 0.0]),
+        np.array([2.0, np.inf, 0.1])
+    ),
+    "one_state_levy_flight_alt": (
         np.array([1.0, 1.0e-8, 0.0]),
         np.array([2.0, np.inf, 0.1])
     ),
@@ -1511,6 +1556,7 @@ MODEL_GUESS = {
     "one_state_brownian": np.array([1.0, 0.035]),
     "one_state_fbm": np.array([0.5, 1.0, 0.035]),
     "one_state_levy_flight": np.array([2.0, 1.0, 0.035]),
+    "one_state_levy_flight_alt": np.array([2.0, 1.0, 0.035]),
     "one_state_levy_hankel": np.array([2.0, 1.0, 0.035]),
     "two_state_brownian": np.array([0.3, 0.01, 1.0, 0.035]),
     "two_state_brownian_zcorr": np.array([0.3, 0.001, 1.0, 0.035]),

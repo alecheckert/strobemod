@@ -98,7 +98,7 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
     """
     # Levy flights require a different binning scheme than the other models in 
     # this package, due to a special projection in the model definition
-    if "levy" in model:
+    if "levy" in model and not "alt" in model:
         bin_size = 0.004  # um
         max_jump = 5.0
     else:
@@ -230,7 +230,7 @@ def fit_model_cdf(tracks, model="one_state_brownian", n_frames=4, frame_interval
     if plot:
 
         # Coarsen the histogram for the purpose of visualization
-        if "levy" in model:
+        if "levy" in model and not "alt" in model:
             pmf_coarse, bin_edges_coarse = coarsen_histogram(pmfs, bin_edges, 5)
         else:
             pmf_coarse, bin_edges_coarse = coarsen_histogram(pmfs, bin_edges, 20)
@@ -402,7 +402,7 @@ def fit_ml(tracks, model="one_state_brownian", n_frames=4, frame_interval=0.01,
 
     # Evaluate the model PMF. For Levy flight models, this is slightly different 
     # due to internal normalization
-    if "levy" in model:
+    if "levy" in model and not "alt" in model:
         model_pmf_eval = model_pmf(rt_tuples, *min_pars).reshape(H.shape)
     else:
         model_pmf_eval = model_pmf(rt_tuples, *min_pars).reshape(H.shape) * bin_size 

@@ -119,7 +119,7 @@ def strobe_infinite_plane(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_ou
         return tracks 
 
 def strobe_nucleus(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=True,
-    n_gaps=0, nucleus_radius=5.0, bleach_prob_per_frame=0):
+    n_gaps=0, nucleus_radius=5.0, bleach_prob_per_frame=0, allow_start_pos_outside=True):
     """
     Simulate 3D trajectories that are photoactivated at any point in a spherical
     "nucleus" and diffuse around for some number of frames. if *return_dataframe*
@@ -143,6 +143,10 @@ def strobe_nucleus(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=T
                             dropping them. Only applies if *exclude_outside* is True.
         nucleus_radius  :   float, radius of the nucleus in um. Trajectories are 
                             not allowed to cross nuclear boundaries.
+        bleach_prob_per_frame   :   float, the probability for each molecule to bleach
+                                    per frame interval
+        allow_start_pos_outside :   bool, allow trajectories to start outside the 
+                                    focal volume
 
     returns
     -------
@@ -179,6 +183,14 @@ def strobe_nucleus(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=T
     for dim in range(3):
         tracks[:,:,dim] = (tracks[:,:,dim].T + start_pos[:,dim]).T 
 
+    # Destroy trajectories that start outside the focal volume if desired
+    if not allow_start_pos_outside:
+        outside = np.logical_or(
+            tracks[:,0,0] < -hz,
+            tracks[:,0,0] > hz
+        )
+        tracks = tracks[~outside, :, :]
+
 
     ## SPECULAR REFLECTIONS: deal with trajectories that cross the nuclear boundary
     # by reflecting back into the nucleus
@@ -210,6 +222,14 @@ def strobe_nucleus(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside=T
             # Set the coordinates of these localizations to NaN
             for d in range(3):
                 tracks[:,t,d][outside] = np.nan 
+
+        # If not allowing trajectories to start outside the focal volume,
+        # set all the remaining positions to zero too
+        if not allow_start_pos_outside:
+            dead = np.zeros(tracks.shape[0], dtype=np.bool)
+            for t in range(tracks.shape[1]):
+                dead = np.logical_or(dead, np.isnan(tracks[:,t,0]))
+                tracks[dead,t,:] = np.nan 
 
 
     ## BLEACHING: stochastically and permanently bleach molecules. The bleaching
@@ -333,6 +353,7 @@ def strobe_ellipsoid(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside
             n_outside = outside.sum()
         print("Finished with %d timepoints..." % t)
 
+
     ## DEFOCALIZATION: exclude molecules outside of the slice from observation
     # by setting their values to NaN. Some of these molecules may subsequently
     # reenter and not be lost, if the number of gaps tolerated during tracking
@@ -378,7 +399,7 @@ def strobe_ellipsoid(model_obj, n_tracks, dz=0.7, loc_error=0.0, exclude_outside
 def strobe_multistate_nucleus(model, n_tracks,  model_diffusivities,
     model_occupations, track_len=10, dz=0.7, frame_interval=0.01, loc_error=0.0,
     exclude_outside=True, n_gaps=0, nucleus_radius=5.0, bleach_prob_per_frame=0,
-    n_rounds=1, **model_kwargs):
+    n_rounds=1, allow_start_pos_outside=True, **model_kwargs):
     """
     Simulate multiple diffusing states inside a sphere ("nucleus"). These 
     are subject to the following:
@@ -463,7 +484,7 @@ def strobe_multistate_nucleus(model, n_tracks,  model_diffusivities,
             model_obj = DIFFUSION_MODELS[model](D=D, dt=frame_interval, track_len=track_len, **model_kwargs)
             tracks_state = strobe_nucleus(model_obj, n_occ[i], dz=dz, loc_error=loc_error,
                 exclude_outside=exclude_outside, n_gaps=n_gaps, nucleus_radius=nucleus_radius,
-                bleach_prob_per_frame=bleach_prob_per_frame)
+                bleach_prob_per_frame=bleach_prob_per_frame, allow_start_pos_outside=allow_start_pos_outside)
             tracks.append(tracks_state)
 
         # Concatenate trajectories from both states
@@ -473,6 +494,9 @@ def strobe_multistate_nucleus(model, n_tracks,  model_diffusivities,
             tracks = np.concatenate(tracks, axis=0)
 
         results.append(tracks)
+
+        if n_rounds > 1:
+            print('finished with %d/%d rounds...' % (round_idx, n_rounds))
 
     if n_rounds > 1:
         return concat_tracks(*results)
